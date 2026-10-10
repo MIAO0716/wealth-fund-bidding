@@ -79,3 +79,33 @@ describe('关联新活动', () => {
     expect(arch.body.error.code).toBe('DEMO_ONLY');
   });
 });
+
+describe('公网加固', () => {
+  it('同一账号连续输错 5 次密码后暂时锁定，正确密码也需等待', async () => {
+    const app = (await buildApp(testConfig(), { logger: false })).app;
+    try {
+      const login = (password: string) =>
+        app.inject({ method: 'POST', url: '/api/v1/auth/admin/login', headers: { 'x-bidding-client': '1' }, payload: { username: 'admin', password } });
+      for (let i = 0; i < 5; i++) expect((await login('wrong-password')).statusCode).toBe(401);
+      const blocked = await login('test-password-123');
+      expect(blocked.statusCode).toBe(429);
+      expect(JSON.parse(blocked.body).error.code).toBe('TOO_MANY_ATTEMPTS');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('安全响应头；HTTPS 部署时启用 HSTS', async () => {
+    const https = (await buildApp(testConfig({ cookieSecure: true }), { logger: false })).app;
+    try {
+      const r = await https.inject({ method: 'GET', url: '/healthz' });
+      expect(r.headers['content-security-policy']).toContain("default-src 'self'");
+      expect(r.headers['x-frame-options']).toBe('DENY');
+      expect(r.headers['strict-transport-security']).toContain('max-age=');
+    } finally {
+      await https.close();
+    }
+    const plain = await ctx.app.inject({ method: 'GET', url: '/healthz' });
+    expect(plain.headers['strict-transport-security']).toBeUndefined();
+  });
+});

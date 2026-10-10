@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# 竞标系统管理命令（安装后为 /usr/local/bin/bidding）
+#   sudo bidding status            查看运行状态与访问地址
+#   sudo bidding start|stop|restart
+#   sudo bidding logs [-f]         查看日志（-f 持续跟踪）
+#   sudo bidding backup [--label 名称] [--keep N]   备份数据库（默认保留全部）
+#   sudo bidding backups           列出备份
+#   sudo bidding restore 文件 [--yes]   从备份恢复（会先停止服务并备份当前数据）
+#   sudo bidding reset-admin       重置管理员 admin 的密码
+#   sudo bidding readonly on|off   只读维护模式（恢复数据前使用）
+#   sudo bidding version
+set -euo pipefail
+
+APP_ROOT=/opt/bidding
+ENV_FILE=/etc/bidding/bidding.env
+BACKUP_DIR=/var/lib/bidding/backups
+SERVICE=bidding
+NODE="$APP_ROOT/current/node/bin/node"
+DIST="$APP_ROOT/current/app/apps/server/dist"
+
+ok() { printf '\033[32m[完成]\033[0m %s\n' "$*"; }
+warn() { printf '\033[35m[注意]\033[0m %s\n' "$*"; }
+die() { printf '\033[31m[出错]\033[0m %s\n' "$*" >&2; exit 1; }
+need_root() { [ "$(id -u)" -eq 0 ] || die "请使用 sudo 运行：sudo bidding $*"; }
+load_env() {
+  [ -f "$ENV_FILE" ] || die "未找到配置 $ENV_FILE，请先运行 install.sh"
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
+}
+psql_app() { psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q "$@"; }
+
+cmd="${1:-status}"
+shift || true
+
+case "$cmd" in
+  status)
+    need_root "$cmd"
+    load_env
+    if systemctl is-active --quiet "$SERVICE"; then ok "程序运行中"; else warn "程序未运行（sudo bidding start）"; fi
+    if curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then ok "健康检查通过"; else warn "健康检查失败"; fi
+    echo "访问地址：$PUBLIC_BASE_URL/admin"
+    echo "版本：$(cat "$APP_ROOT/current/VERSION")"
+    [ "${READ_ONLY:-false}" = "true" ] && warn "当前为只读维护模式（sudo bidding readonly off 恢复）"
+    echo "最近备份：$(ls -1t "$BACKUP_DIR"/*.dump 2>/dev/null | head -1 || echo 无)"
+    ;;
+
+  start|stop|restart)
+    need_root "$cmd"
+    systemctl "$cmd" "$SERVICE"
+    ok "已执行 $cmd"
+    ;;
+
+  logs)
+    need_root "$cmd"
+    if [ "${1:-}" = "-f" ]; then journalctl -u "$SERVICE" -f; else journalctl -u "$SERVICE" -n 200 --no-pager; fi
+    ;;
+
+  backup)
+    need_root "$cmd"
+    load_env
+    label=manual keep=0 quiet=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --label) label="$2"; shift 2 ;;
+        --keep) keep="$2"; shift 2 ;;
+        --quiet) quiet=1; shift ;;
+        *) die "未知参数：$1" ;;
+      esac
+    done
+    printf '%s' "$label" | grep -Eq '^[A-Za-z0-9_-]+$' || die "备份名称只能包含字母、数字、-、_"
+    file="$BACKUP_DIR/$label-$(TZ=Asia/Shanghai date +%Y%m%d-%H%M%S).dump"
+    pg_dump -Fc -f "$file" "$DATABASE_URL"
+    pg_restore -l "$file" >/dev/null
+    chown "$SERVICE:$SERVICE" "$file"
+    chmod 640 "$file"
+    psql_app -c "INSERT INTO maintenance_log (action, details) VALUES ('CHECKPOINT', jsonb_build_object('label', '$label', 'file', '$file', 'by', 'bidding backup'))" >/dev/null
+    if [ "$keep" -gt 0 ] 2>/dev/null; then
+      ls -1t "$BACKUP_DIR/$label"-*.dump 2>/dev/null | tail -n +"$((keep + 1))" | xargs -r rm -f
+    fi
+    [ "$quiet" -eq 1 ] || ok "备份完成：$file（建议另存一份到本地电脑）"
+    ;;
+
+  backups)
+    need_root "$cmd"
+    ls -lht "$BACKUP_DIR"/*.dump 2>/dev/null || echo "暂无备份"
+    ;;
+
+  restore)
+    need_root "$cmd"
+    load_env
+    file="${1:-}"
+    [ -n "$file" ] || die "用法：sudo bidding restore 备份文件 [--yes]（sudo bidding backups 查看备份）"
+    [ -f "$file" ] || die "备份文件不存在：$file"
+    pg_restore -l "$file" >/dev/null || die "备份文件无法读取"
+    if [ "${2:-}" != "--yes" ]; then
+      warn "将用 $file 覆盖当前全部数据；恢复期间服务暂停，恢复后所有领导手机与大屏需重新扫码/打开链接。"
+      read -r -p "确认请输入 RESTORE：" ans
+      [ "$ans" = "RESTORE" ] || die "已取消"
+    fi
+    systemctl stop "$SERVICE"
+    before="$BACKUP_DIR/before-restore-$(TZ=Asia/Shanghai date +%Y%m%d-%H%M%S).dump"
+    pg_dump -Fc -f "$before" "$DATABASE_URL"
+    chown "$SERVICE:$SERVICE" "$before"
+    ok "已先备份当前数据：$before"
+    pg_restore --clean --if-exists --no-owner --no-privileges -d "$DATABASE_URL" "$file" 2>/tmp/bidding-restore.log || warn "pg_restore 有警告，详见 /tmp/bidding-restore.log"
+    psql_app <<SQL
+UPDATE sessions SET revoked_at = now(), revoke_reason = '备份恢复后统一失效' WHERE role IN ('BIDDER', 'SCREEN') AND revoked_at IS NULL;
+UPDATE unit_credentials SET revoked_at = now() WHERE used_at IS NULL AND revoked_at IS NULL;
+INSERT INTO maintenance_log (action, details) VALUES ('RESTORE', jsonb_build_object('file', '$file', 'before', '$before'));
+SQL
+    systemctl start "$SERVICE"
+    ok "恢复完成，服务已启动。请在管理端重新发放领导二维码、重新打开大屏链接。"
+    ;;
+
+  set-admin-password)
+    # 供 install.sh / reset-admin 调用；密码通过环境变量 BIDDING_NEW_PASSWORD 传入，不出现在进程参数中
+    need_root "$cmd"
+    load_env
+    [ -n "${BIDDING_NEW_PASSWORD:-}" ] || die "缺少 BIDDING_NEW_PASSWORD"
+    export ADMIN_PASSWORD="$BIDDING_NEW_PASSWORD"
+    runuser -u "$SERVICE" -- "$NODE" "$DIST/admin-create.js" --username admin --name 工作人员
+    ;;
+
+  reset-admin)
+    need_root "$cmd"
+    while true; do
+      read -r -s -p "请输入管理员 admin 的新密码（至少 10 位）：" p1; echo
+      read -r -s -p "请再输入一次：" p2; echo
+      [ "$p1" = "$p2" ] || { warn "两次输入不一致"; continue; }
+      [ "${#p1}" -ge 10 ] || { warn "至少 10 位"; continue; }
+      break
+    done
+    BIDDING_NEW_PASSWORD="$p1" "$0" set-admin-password >/dev/null
+    ok "密码已重置，账号仍为 admin"
+    ;;
+
+  readonly)
+    need_root "$cmd"
+    case "${1:-}" in
+      on) v=true ;;
+      off) v=false ;;
+      *) die "用法：sudo bidding readonly on|off" ;;
+    esac
+    sed -i -E "s/^READ_ONLY=.*/READ_ONLY=$v/" "$ENV_FILE"
+    systemctl restart "$SERVICE"
+    ok "只读维护模式：$1"
+    ;;
+
+  version)
+    cat "$APP_ROOT/current/VERSION"
+    ;;
+
+  *)
+    sed -n '2,13p' "$0"
+    exit 1
+    ;;
+esac

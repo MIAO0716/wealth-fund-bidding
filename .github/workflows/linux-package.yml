@@ -1,0 +1,75 @@
+name: 云服务器部署包
+
+# 在 GitHub 的 Ubuntu 构建机上：构建 → 组装 Linux 部署包 → 真实执行 install.sh（systemd + Nginx + HTTPS）全流程验证 → 发布到 Releases
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 验证通过后发布到 Releases 页面
+        type: boolean
+        default: true
+  push:
+    tags: ['cloud-v*']
+
+permissions:
+  contents: write
+
+jobs:
+  linux-package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.3'
+          cache: npm
+
+      - name: 安装依赖并构建
+        run: |
+          npm ci
+          npm run build
+
+      - name: 检查脚本
+        run: shellcheck -S warning packaging/linux/install.sh packaging/linux/scripts/bidding packaging/linux/build.sh packaging/linux/ci-test.sh
+
+      - name: 组装部署包
+        run: ./packaging/linux/build.sh
+
+      - name: 在 Ubuntu 上真实安装并验证
+        run: ./packaging/linux/ci-test.sh
+
+      - name: 上传部署包
+        uses: actions/upload-artifact@v4
+        with:
+          name: BiddingSystem-linux-x64
+          path: dist-package/BiddingSystem-linux-x64.tar.gz
+          retention-days: 30
+
+      - name: 发布到 Releases
+        if: github.ref_type == 'tag' || inputs.publish_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then TAG="${{ github.ref_name }}"; else TAG="cloud-$(TZ=Asia/Shanghai date +%Y%m%d-%H%M)"; fi
+          VERSION="$(cat dist-package/build-info-linux.txt)"
+          NOTES="云服务器部署包（${VERSION}）
+
+          适用 Ubuntu 22.04/24.04、Debian 12（x86_64）。与 Windows 一键部署包相互独立。
+
+          上传到服务器后：
+          tar xzf BiddingSystem-linux-x64.tar.gz && cd BiddingSystem-linux-x64
+          sudo ./install.sh --domain 你的域名 --email 你的邮箱
+
+          自动安装数据库与 Nginx、申请免费 HTTPS 证书、开机自启、每天自动备份。详见包内「部署说明.txt」。
+          中国大陆服务器的域名须先完成 ICP 备案。
+
+          本版本已在 GitHub Ubuntu 构建机上真实执行安装脚本，并通过 HTTPS、实时推送、冒烟、重启、备份恢复、升级、重置密码、只读模式验证。"
+          gh release create "$TAG" dist-package/BiddingSystem-linux-x64.tar.gz --title "云服务器部署包 $TAG" --notes "$NOTES" --target "${{ github.sha }}" --latest=false
+
+      - name: 失败时输出日志
+        if: failure()
+        run: |
+          sudo journalctl -u bidding -n 200 --no-pager || true
+          sudo tail -n 50 /var/log/nginx/error.log || true

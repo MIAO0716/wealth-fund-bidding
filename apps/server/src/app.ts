@@ -78,6 +78,14 @@ export async function buildApp(config: AppConfig, opts: { db?: Db; logger?: bool
     if (req.url.startsWith('/api/')) reply.header('Cache-Control', 'no-store');
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('Referrer-Policy', 'no-referrer');
+    reply.header('X-Frame-Options', 'DENY');
+    // 页面只加载本站资源；二维码为 data: 图片；SSE/接口同源
+    reply.header(
+      'Content-Security-Policy',
+      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+    );
+    // HTTPS 部署：强制浏览器之后只用 HTTPS 访问
+    if (config.cookieSecure) reply.header('Strict-Transport-Security', 'max-age=31536000');
     return payload;
   });
 

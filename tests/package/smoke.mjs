@@ -44,7 +44,7 @@ if (mode === 'setup') {
   const start = await req('POST', `${E}/projects/wealth/control`, { action: 'START', groupNo: 1, expectedControlVersion: st.projects.wealth.controlVersion, idempotencyKey: `smoke-start-${ev.id}` }, admin);
   assert(start.status === 200, '开始竞标并开放第一组');
   const cred = (await req('POST', `${E}/units/PD/credentials`, {}, admin)).data;
-  assert(/^http:\/\/\d+\.\d+\.\d+\.\d+:\d+\/join#t=/.test(cred.joinUrl) || cred.joinUrl.startsWith('http://localhost'), `二维码地址：${cred.joinUrl.replace(/#t=.*/, '#t=…')}`);
+  assert(/^https?:\/\/[^/]+\/join#t=/.test(cred.joinUrl), `二维码地址：${cred.joinUrl.replace(/#t=.*/, '#t=…')}`);
   const ex = await req('POST', '/api/v1/auth/bidder/exchange', { token: new URL(cred.joinUrl).hash.slice(3) });
   assert(ex.status === 200, '领导扫码换取会话');
   const pd = cookieOf(ex.res);
@@ -54,6 +54,29 @@ if (mode === 'setup') {
   const from = me.projects.wealth.currentPp;
   const bid = await req('POST', `/api/v1/bidder/events/${ev.id}/projects/wealth/bids`, { targetIncreasePp: from + 5, expectedBidVersion: 0, idempotencyKey: `smoke-bid-${ev.id}` }, pd);
   assert(bid.status === 201 && bid.data.receipt.toPp === from + 5, `追加 ${from}% → ${from + 5}%`);
+  // 实时推送：大屏连接应立即收到 hello（经反向代理时验证未被缓冲）
+  const key = (await req('POST', `${E}/screen-keys`, { label: '冒烟' }, admin)).data;
+  const sx = await req('POST', '/api/v1/auth/screen/exchange', { key: new URL(key.screenUrl).hash.slice(3) });
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 5000);
+  let hello = false;
+  try {
+    const stream = await fetch(`${BASE}/api/v1/screen/events/${ev.id}/stream?since=0`, { headers: { cookie: cookieOf(sx.res) }, signal: ac.signal });
+    const reader = stream.body.getReader();
+    let text = '';
+    while (!hello) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += new TextDecoder().decode(value);
+      hello = text.includes('event: hello');
+    }
+  } catch {
+    // 超时
+  } finally {
+    clearTimeout(timer);
+    ac.abort();
+  }
+  assert(hello, '实时推送（SSE）连接 5 秒内收到 hello');
   const xlsx = await req('GET', `${E}/exports/ledger.xlsx`, undefined, admin);
   assert(xlsx.status === 200 && xlsx.data.byteLength > 5000, 'Excel 导出');
   st = (await req('GET', `${E}/state`, undefined, admin)).data;

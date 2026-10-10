@@ -31,6 +31,7 @@ export const ERROR_MESSAGES = {
   BAD_REQUEST: '请求格式不正确',
   READ_ONLY: '系统处于只读维护状态，暂停写入',
   CREDENTIAL_INVALID: '二维码已失效或已被使用，请联系工作人员重新发放',
+  TOO_MANY_ATTEMPTS: '尝试次数过多，请稍后再试',
   INTERNAL: '服务器内部错误',
 } as const;
 

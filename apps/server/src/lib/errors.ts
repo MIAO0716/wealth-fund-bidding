@@ -12,6 +12,7 @@ const STATUS: Partial<Record<ErrorCode, number>> = {
   DRAFT_VERSION_CONFLICT: 409,
   INTERNAL: 500,
   READ_ONLY: 503,
+  TOO_MANY_ATTEMPTS: 429,
 };
 
 /** 业务错误：返回统一错误码与中文提示 */
