@@ -27,7 +27,7 @@ smoke setup
 
 step '重启服务后数据保留'
 sudo bidding restart
-for i in $(seq 1 30); do curl -fsk https://localhost/healthz >/dev/null 2>&1 && break; sleep 1; done
+for _ in $(seq 1 30); do curl -fsk https://localhost/healthz >/dev/null 2>&1 && break; sleep 1; done
 smoke verify
 
 step '备份与恢复'
@@ -35,7 +35,7 @@ sudo bidding backup
 FILE="$(sudo bash -c 'ls -1t /var/lib/bidding/backups/manual-*.dump | head -1')"
 echo "备份：$FILE"
 sudo bidding restore "$FILE" --yes
-for i in $(seq 1 30); do curl -fsk https://localhost/healthz >/dev/null 2>&1 && break; sleep 1; done
+for _ in $(seq 1 30); do curl -fsk https://localhost/healthz >/dev/null 2>&1 && break; sleep 1; done
 smoke verify
 
 step '升级（同一安装包重新运行 install.sh，不带参数）'
@@ -49,7 +49,7 @@ ADMIN_PASSWORD=ci-new-password-456 smoke verify
 
 step '只读维护模式'
 sudo bidding readonly on
-for i in $(seq 1 30); do curl -fsk https://localhost/healthz | grep -q '"readOnly":true' && break; sleep 1; done
+for _ in $(seq 1 30); do curl -fsk https://localhost/healthz | grep -q '"readOnly":true' && break; sleep 1; done
 curl -fsk https://localhost/healthz | grep -q '"readOnly":true'
 sudo bidding readonly off
 
