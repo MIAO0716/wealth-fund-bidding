@@ -1,4 +1,5 @@
 // 生产构建：把服务端与共享包打成单个 ESM 文件，node_modules 依赖保持外部引用
+import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
 await build({
@@ -14,7 +15,7 @@ await build({
     {
       name: 'bundle-workspace',
       setup(b) {
-        b.onResolve({ filter: /^@bidding\/shared$/ }, () => ({ path: new URL('../../../packages/shared/src/index.ts', import.meta.url).pathname }));
+        b.onResolve({ filter: /^@bidding\/shared$/ }, () => ({ path: fileURLToPath(new URL('../../../packages/shared/src/index.ts', import.meta.url)) }));
       },
     },
   ],
