@@ -38,6 +38,19 @@ sudo bidding restore "$FILE" --yes
 for _ in $(seq 1 30); do curl -fsk https://localhost/healthz >/dev/null 2>&1 && break; sleep 1; done
 smoke verify
 
+step '恢复失败（备份文件损坏但目录可读）：非零退出、整体回滚、服务保持停止'
+BROKEN=/tmp/broken.dump
+sudo bash -c "head -c \$(( \$(stat -c %s '$FILE') * 9 / 10 )) '$FILE' > $BROKEN"
+sudo pg_restore -l "$BROKEN" >/dev/null
+count_restores() { sudo bash -c '. /etc/bidding/bidding.env; psql "$DATABASE_URL" -tAc "SELECT count(*) FROM maintenance_log WHERE action = '"'"'RESTORE'"'"'"'; }
+BEFORE_COUNT="$(count_restores)"
+if sudo bidding restore "$BROKEN" --yes; then echo "损坏的备份应恢复失败"; exit 1; fi
+if systemctl is-active --quiet bidding; then echo "恢复失败后服务不应自动启动"; exit 1; fi
+[ "$(count_restores)" = "$BEFORE_COUNT" ] || { echo "恢复失败后不应写入恢复记录"; exit 1; }
+sudo bidding start
+for _ in $(seq 1 30); do curl -fsk https://localhost/healthz >/dev/null 2>&1 && break; sleep 1; done
+smoke verify
+
 step '升级（同一安装包重新运行 install.sh，不带参数）'
 sudo "$PKG/install.sh" --yes
 smoke verify

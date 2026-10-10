@@ -21,9 +21,13 @@ BEFORE="$DIR/before-restore-$(TZ=Asia/Shanghai date +%Y%m%d-%H%M%S).dump"
 pg_dump -Fc -f "$BEFORE" "$DATABASE_URL"
 echo "已先备份当前数据：$BEFORE"
 
-pg_restore --clean --if-exists --no-owner --no-privileges -d "$DATABASE_URL" "$FILE"
+# 单事务 + 出错即停：失败时整体回滚，数据库保持恢复前的状态
+if ! pg_restore --clean --if-exists --no-owner --no-privileges --single-transaction --exit-on-error -d "$DATABASE_URL" "$FILE"; then
+  echo "恢复失败，已整体回滚：数据库仍是恢复前的数据。请勿恢复写入，排查后重试。" >&2
+  exit 1
+fi
 
-psql "$DATABASE_URL" -q -v ON_ERROR_STOP=1 <<SQL
+psql "$DATABASE_URL" -q -1 -v ON_ERROR_STOP=1 <<SQL
 UPDATE sessions SET revoked_at = now(), revoke_reason = '备份恢复后统一失效'
  WHERE role IN ('BIDDER', 'SCREEN') AND revoked_at IS NULL;
 UPDATE unit_credentials SET revoked_at = now() WHERE used_at IS NULL AND revoked_at IS NULL;

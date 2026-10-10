@@ -8,7 +8,7 @@
 
 import { UNIT_BY_CODE } from '@bidding/shared';
 import QRCode from 'qrcode';
-import type { Queryable } from '../db/pool';
+import { type Db, type Queryable, withTx } from '../db/pool';
 import { hashPassword, randomToken, sha256, uuid, verifyPassword } from '../lib/crypto';
 import { bizError } from '../lib/errors';
 import { endOfShanghaiDay, toIso } from '../lib/time';
@@ -93,17 +93,25 @@ export async function revokeSessionById(q: Queryable, id: string, reason: string
 
 // ---------------------------------------------------------------- 管理员
 
-export async function createAdmin(q: Queryable, username: string, displayName: string, password: string): Promise<string> {
+/** 创建或重置管理员；重置密码时在同一事务内撤销该管理员的全部会话（含已建立的实时连接） */
+export async function createAdmin(db: Db, username: string, displayName: string, password: string): Promise<string> {
   if (!/^[A-Za-z0-9_.-]{3,32}$/.test(username)) throw new Error('用户名须为 3–32 位字母、数字或 _.-');
   if (password.length < 10) throw new Error('密码至少 10 位');
-  const id = uuid();
-  await q.query(
-    `INSERT INTO admins (id, username, display_name, password_hash) VALUES ($1, $2, $3, $4)
-     ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash, display_name = EXCLUDED.display_name, disabled = false`,
-    [id, username, displayName, await hashPassword(password)],
-  );
-  const r = await q.query('SELECT id FROM admins WHERE username = $1', [username]);
-  return r.rows[0].id;
+  const hash = await hashPassword(password);
+  return withTx(db, async (tx) => {
+    const r = await tx.query(
+      `INSERT INTO admins (id, username, display_name, password_hash) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash, display_name = EXCLUDED.display_name, disabled = false
+       RETURNING id`,
+      [uuid(), username, displayName, hash],
+    );
+    const id: string = r.rows[0].id;
+    await tx.query(
+      `UPDATE sessions SET revoked_at = now(), revoke_reason = '管理员密码已重置' WHERE admin_id = $1 AND revoked_at IS NULL`,
+      [id],
+    );
+    return id;
+  });
 }
 
 export async function adminLogin(ctx: AppContext, username: unknown, password: unknown, userAgent?: string) {

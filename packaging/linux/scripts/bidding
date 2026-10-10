@@ -104,11 +104,18 @@ case "$cmd" in
     pg_dump -Fc -f "$before" "$DATABASE_URL"
     chown "$SERVICE:$SERVICE" "$before"
     ok "已先备份当前数据：$before"
-    pg_restore --clean --if-exists --no-owner --no-privileges -d "$DATABASE_URL" "$file" 2>/tmp/bidding-restore.log || warn "pg_restore 有警告，详见 /tmp/bidding-restore.log"
-    psql_app <<SQL
+    log="$BACKUP_DIR/restore-$(TZ=Asia/Shanghai date +%Y%m%d-%H%M%S).log"
+    # 单事务 + 出错即停：任何错误都整体回滚，数据库保持恢复前的状态，服务保持停止
+    if ! pg_restore --clean --if-exists --no-owner --no-privileges --single-transaction --exit-on-error \
+      -d "$DATABASE_URL" "$file" 2>"$log"; then
+      die "恢复失败，已整体回滚：数据库仍是恢复前的数据，服务保持停止。错误详见 $log。确认无误后可用 sudo bidding start 继续使用当前数据。"
+    fi
+    check=$(psql_app -tAc "SELECT CASE WHEN (SELECT count(*) FROM units) = 16 AND EXISTS (SELECT 1 FROM schema_migrations) THEN 'ok' ELSE 'bad' END" 2>>"$log") || check=bad
+    [ "$check" = "ok" ] || die "恢复后校验未通过（单位表或迁移记录异常），服务保持停止。恢复前的数据在 $before，日志 $log"
+    psql_app -1 <<SQL 2>>"$log" || die "作废旧会话失败，服务保持停止（避免旧手机继续报价）。日志 $log"
 UPDATE sessions SET revoked_at = now(), revoke_reason = '备份恢复后统一失效' WHERE role IN ('BIDDER', 'SCREEN') AND revoked_at IS NULL;
 UPDATE unit_credentials SET revoked_at = now() WHERE used_at IS NULL AND revoked_at IS NULL;
-INSERT INTO maintenance_log (action, details) VALUES ('RESTORE', jsonb_build_object('file', '$file', 'before', '$before'));
+INSERT INTO maintenance_log (action, details) VALUES ('RESTORE', jsonb_build_object('file', '${file//\'/}', 'before', '${before//\'/}'));
 SQL
     systemctl start "$SERVICE"
     ok "恢复完成，服务已启动。请在管理端重新发放领导二维码、重新打开大屏链接。"

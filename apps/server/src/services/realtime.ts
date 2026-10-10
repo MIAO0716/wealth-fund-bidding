@@ -3,6 +3,8 @@
  * - 写事务内 pg_notify，提交后由 LISTEN 连接唤醒；另有定时兜底拉取，防止通知丢失。
  * - 每个连接维护自己的游标 lastSeq，按序从数据库读取并按权限过滤后推送，不会漏发、不会乱序。
  * - 断线重连时客户端带 Last-Event-ID / since，从该序列之后补发；序列超前（如备份恢复后）则要求重新同步全量快照。
+ * - 每次拉取与会话有效性检查在同一条语句（同一快照）中完成：会话撤销、到期、管理员停用或大屏凭证撤销后，
+ *   之后提交的事件不会再推送给该连接，连接随即关闭；兜底拉取每 3 秒一次，空闲连接最迟约 3 秒内关闭。
  */
 
 import type { RealtimeMessage } from '@bidding/shared';
@@ -16,6 +18,8 @@ const SAFETY_POLL_MS = 3_000;
 export interface Subscriber {
   id: number;
   role: Role;
+  /** 建立连接时的会话；失效后关闭连接 */
+  sessionId: string;
   eventId: string;
   unitCode: string | null;
   lastSeq: number;
@@ -26,7 +30,8 @@ export interface Subscriber {
 }
 
 interface Row {
-  seq: string;
+  session_ok: boolean;
+  seq: string | null;
   type: string;
   project_code: string | null;
   unit_code: string | null;
@@ -151,11 +156,32 @@ export class RealtimeHub {
       try {
         for (;;) {
           const r = await this.db.query<Row>(
-            `SELECT seq, type, project_code, unit_code, audience, data, created_at
-               FROM realtime_events WHERE event_id = $1 AND seq > $2 ORDER BY seq LIMIT 200`,
-            [sub.eventId, sub.lastSeq],
+            `WITH auth AS (
+               SELECT EXISTS (
+                 SELECT 1 FROM sessions s
+                   LEFT JOIN admins a ON a.id = s.admin_id
+                   LEFT JOIN screen_keys k ON s.role = 'SCREEN' AND k.id = s.credential_id
+                  WHERE s.id = $3 AND s.revoked_at IS NULL AND s.expires_at > now()
+                    AND a.disabled IS NOT TRUE AND k.revoked_at IS NULL
+               ) AS ok
+             )
+             SELECT auth.ok AS session_ok, e.seq, e.type, e.project_code, e.unit_code, e.audience, e.data, e.created_at
+               FROM auth
+               LEFT JOIN LATERAL (
+                 SELECT seq, type, project_code, unit_code, audience, data, created_at
+                   FROM realtime_events WHERE auth.ok AND event_id = $1 AND seq > $2 ORDER BY seq LIMIT 200
+               ) e ON true`,
+            [sub.eventId, sub.lastSeq, sub.sessionId],
           );
-          for (const row of r.rows) {
+          if (!r.rows[0]?.session_ok) {
+            // 会话已失效：不再推送，通知客户端后关闭（重连时会重新鉴权）
+            this.subs.delete(sub.id);
+            sub.send('revoked', { reason: 'SESSION_INVALID' });
+            sub.close();
+            return;
+          }
+          const rows = r.rows.filter((row) => row.seq !== null);
+          for (const row of rows) {
             const seq = Number(row.seq);
             if (visibleTo(sub.role, sub.unitCode, row)) {
               const msg: RealtimeMessage = {
@@ -170,7 +196,7 @@ export class RealtimeHub {
             }
             sub.lastSeq = seq;
           }
-          if (r.rows.length < 200) break;
+          if (rows.length < 200) break;
         }
       } catch (err) {
         this.log('推送拉取失败', err);

@@ -1,5 +1,5 @@
 /**
- * 断线与降级：大屏断网 20 秒后恢复（A21）、SSE 被拦截时降级为 2 秒拉取、管理端导出下载。
+ * 断线与降级：大屏断网 20 秒后恢复（A21）、会话撤销后旧手机提示失效、SSE 被拦截时降级为 2 秒拉取、管理端导出下载。
  */
 import { type APIRequestContext, type BrowserContext, expect, test } from '@playwright/test';
 
@@ -93,6 +93,26 @@ test('A21 大屏断网 20 秒后恢复：显示断线并保留数据，恢复后
   const feed = await screen.locator('.s-feed-item').allTextContents();
   expect(feed.filter((t) => t.includes('15% → 20%'))).toHaveLength(1);
   await Promise.all([admin.close(), phone.close(), screenCtx.close()]);
+});
+
+test('工作人员撤销该单位访问后，旧手机无需刷新即提示会话失效，且不再自动重连', async ({ browser, baseURL }) => {
+  const admin = await browser.newContext();
+  await adminLogin(admin);
+  const phone = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const { eventId } = await prepare(admin.request, phone.request, baseURL!);
+  const page = await phone.newPage();
+  let streamRequests = 0;
+  page.on('request', (r) => {
+    if (r.url().includes('/stream')) streamRequests++;
+  });
+  await page.goto('/bid');
+  await expect(page.getByText('实时同步')).toBeVisible({ timeout: 10_000 });
+  await admin.request.post(`/api/v1/admin/events/${eventId}/units/PD/revoke`, { headers: H, data: { reason: 'E2E 换手机' } });
+  await expect(page.getByText('会话失效，请联系工作人员重新扫码')).toBeVisible({ timeout: 8_000 });
+  const after = streamRequests;
+  await page.waitForTimeout(5_000);
+  expect(streamRequests).toBe(after);
+  await Promise.all([admin.close(), phone.close()]);
 });
 
 test('SSE 被拦截时降级为 2 秒拉取，数据仍然更新', async ({ browser, baseURL }) => {

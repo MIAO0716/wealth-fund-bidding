@@ -1,5 +1,5 @@
 import type { AppConfig } from '../config';
-import type { Db, Tx } from '../db/pool';
+import type { Db, Queryable, Tx } from '../db/pool';
 import { BizError, bizError } from '../lib/errors';
 import { digest } from '../lib/crypto';
 import {
@@ -17,6 +17,7 @@ export interface AppContext {
   config: AppConfig;
   /** 首轮发布、项目锁定后的检查点钩子（备份） */
   onCheckpoint?: (eventId: string, label: string) => void;
+  log?: (msg: string, err?: unknown) => void;
 }
 
 export interface WriteResult<T> {
@@ -53,6 +54,7 @@ export async function runWrite<T>(
   const scope = idemScope(eventId, actor);
   const requestHash = digest({ op: opts.operation, req: opts.request ?? null });
   const client = await ctx.db.connect();
+  let released = false;
   try {
     await client.query('BEGIN');
     const event = await lockEvent(client, eventId);
@@ -73,18 +75,29 @@ export async function runWrite<T>(
     await client.query('COMMIT');
     return { statusCode, body: out.body, replayed: false };
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
+    // 回滚后继续用同一连接记录失败，不在持有连接时再向连接池申请新连接（并发失败时会互等、占满连接池）
+    let healthy = true;
+    await client.query('ROLLBACK').catch(() => {
+      healthy = false;
+    });
+    if (!healthy) {
+      // 连接已损坏：先丢弃再用连接池记录
+      released = true;
+      client.release(true);
+    }
     if (err instanceof BizError && err.code !== 'IDEMPOTENCY_CONFLICT' && err.code !== 'READ_ONLY') {
-      await recordFailure(ctx, eventId, actor, opts, key, scope, requestHash, err).catch(() => {});
+      await recordFailure(healthy ? client : ctx.db, eventId, actor, opts, key, scope, requestHash, err).catch((e) =>
+        ctx.log?.(`记录失败提交出错（${opts.operation} ${err.code}）`, e),
+      );
     }
     throw err;
   } finally {
-    client.release();
+    if (!released) client.release();
   }
 }
 
 async function recordFailure(
-  ctx: AppContext,
+  q: Queryable,
   eventId: string,
   actor: Actor,
   opts: WriteOptions,
@@ -96,7 +109,7 @@ async function recordFailure(
   const tasks: Promise<unknown>[] = [];
   if (key && opts.storeFailures && err.code !== 'NOT_FOUND') {
     tasks.push(
-      ctx.db.query(
+      q.query(
         `INSERT INTO idempotency_records (scope, idem_key, operation, request_hash, status_code, response)
          VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING`,
         [scope, key, opts.operation, requestHash, err.status, JSON.stringify(err.toBody())],
@@ -105,7 +118,7 @@ async function recordFailure(
   }
   if (opts.failureLog) {
     tasks.push(
-      ctx.db.query(
+      q.query(
         `INSERT INTO failed_submissions (event_id, project_code, unit_code, actor_type, actor_id, operation, error_code, message)
          SELECT $1, $2, $3, $4, $5, $6, $7, $8 WHERE EXISTS (SELECT 1 FROM events WHERE id = $1)`,
         [

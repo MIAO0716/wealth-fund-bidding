@@ -7,7 +7,7 @@ export async function openStream(
   hub: RealtimeHub,
   req: FastifyRequest,
   reply: FastifyReply,
-  opts: { role: Role; eventId: string; unitCode: string | null },
+  opts: { role: Role; sessionId: string; eventId: string; unitCode: string | null },
 ): Promise<void> {
   const q = req.query as { since?: string };
   const lastEventId = req.headers['last-event-id'];
@@ -38,7 +38,7 @@ export async function openStream(
     closed = true;
     res.end();
   };
-  const sub = await hub.subscribe({ role: opts.role, eventId: opts.eventId, unitCode: opts.unitCode, since, send, close });
+  const sub = await hub.subscribe({ role: opts.role, sessionId: opts.sessionId, eventId: opts.eventId, unitCode: opts.unitCode, since, send, close });
   req.raw.on('close', () => {
     closed = true;
     hub.unsubscribe(sub);

@@ -22,11 +22,17 @@ export interface RequestOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * 超时覆盖整个请求：建立连接、等待响应头和读取正文。
+ * 网络中断、超时（含正文读到一半中断）统一为「结果待核验」类错误，调用方按原请求标识核验，不重复提交。
+ */
 async function request<T>(method: string, url: string, opts: RequestOptions = {}): Promise<T> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort('timeout'), opts.timeoutMs ?? 10_000);
-  opts.signal?.addEventListener('abort', () => ac.abort());
+  const onAbort = () => ac.abort();
+  opts.signal?.addEventListener('abort', onAbort, { once: true });
   let res: Response;
+  let text: string;
   try {
     const isForm = opts.body instanceof FormData;
     res = await fetch(url, {
@@ -39,13 +45,14 @@ async function request<T>(method: string, url: string, opts: RequestOptions = {}
       body: opts.body === undefined ? undefined : isForm ? (opts.body as FormData) : JSON.stringify(opts.body),
       signal: ac.signal,
     });
+    text = await res.text();
   } catch {
-    clearTimeout(timer);
     if (ac.signal.aborted && ac.signal.reason === 'timeout') throw new ApiError(0, 'TIMEOUT', '网络超时，结果待核验');
     throw new ApiError(0, 'NETWORK', '网络连接异常');
+  } finally {
+    clearTimeout(timer);
+    opts.signal?.removeEventListener('abort', onAbort);
   }
-  clearTimeout(timer);
-  const text = await res.text();
   let data: any = null;
   try {
     data = text ? JSON.parse(text) : null;

@@ -8,7 +8,8 @@ export type Queryable = pg.Pool | pg.PoolClient;
 pg.types.setTypeParser(20, (v) => v);
 
 export function createPool(databaseUrl: string): Db {
-  return new pg.Pool({ connectionString: databaseUrl, max: 20 });
+  // 获取连接最多等 15 秒：异常情况下请求报错返回，而不是无限期挂起
+  return new pg.Pool({ connectionString: databaseUrl, max: 20, connectionTimeoutMillis: 15_000 });
 }
 
 /** 在事务中执行；抛错自动回滚 */

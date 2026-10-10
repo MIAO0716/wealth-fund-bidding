@@ -11,6 +11,9 @@ export default defineConfig({
   reporter: [['list']],
   use: {
     baseURL: BASE_URL,
+    // 失败时保留现场（测试库的临时凭证，不含正式数据）
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
     launchOptions: process.env.CHROMIUM_PATH || process.env.PLAYWRIGHT_BROWSERS_PATH === '/opt/pw-browsers'
       ? { executablePath: process.env.CHROMIUM_PATH ?? '/opt/pw-browsers/chromium' }
       : {},

@@ -28,6 +28,7 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
 
 /** 清空测试库并执行迁移 */
 export async function resetDb(): Promise<void> {
+  if (!/test/.test(new URL(TEST_DB_URL).pathname)) throw new Error('测试数据库名必须包含 test，防止误清空正式库');
   const c = new pg.Client({ connectionString: TEST_DB_URL });
   await c.connect();
   await c.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');

@@ -45,6 +45,6 @@ export function registerBidderRoutes(api: FastifyInstance, deps: AppDeps): void 
   });
 
   api.get<{ Params: P }>('/bidder/events/:eventId/stream', auth, async (req, reply) => {
-    await openStream(hub, req, reply, { role: 'BIDDER', eventId: req.params.eventId, unitCode: req.session!.unitCode });
+    await openStream(hub, req, reply, { role: 'BIDDER', sessionId: req.session!.id, eventId: req.params.eventId, unitCode: req.session!.unitCode });
   });
 }

@@ -92,6 +92,19 @@ $null = Start-Package 'after-restore'
 & node (Join-Path $repo 'tests\package\smoke.mjs') verify
 if ($LASTEXITCODE -ne 0) { throw '恢复后数据校验失败' }
 
+# 5b. 恢复失败（备份文件损坏但可读取目录）：报错、整体回滚、不自动启动，数据保持不变
+$bytes = [IO.File]::ReadAllBytes($backup.FullName)
+$broken = Join-Path $env:RUNNER_TEMP 'broken.dump'
+[IO.File]::WriteAllBytes($broken, $bytes[0..([int]($bytes.Length * 0.9) - 1)])
+Invoke-Bat '4-恢复数据.bat' $broken
+$restoreOut = Get-Content (Join-Path $env:RUNNER_TEMP '4-恢复数据.bat.log') -Raw
+if ($restoreOut -notmatch '恢复失败') { throw '损坏的备份应提示恢复失败' }
+if ($restoreOut -match '恢复完成') { throw '恢复失败时不应提示完成' }
+if (-not (Test-Down)) { throw '恢复失败后服务不应运行' }
+$null = Start-Package 'after-failed-restore'
+& node (Join-Path $repo 'tests\package\smoke.mjs') verify
+if ($LASTEXITCODE -ne 0) { throw '恢复失败后数据应保持不变' }
+
 # 6. 重置管理员密码
 Invoke-Bat '2-停止系统.bat'
 $env:BIDDING_ADMIN_PASSWORD = 'ci-new-password-456'

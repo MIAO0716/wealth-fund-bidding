@@ -328,6 +328,6 @@ export function registerAdminRoutes(api: FastifyInstance, deps: AppDeps): void {
   });
 
   api.get<{ Params: P }>('/admin/events/:eventId/stream', auth, async (req, reply) => {
-    await openStream(hub, req, reply, { role: 'ADMIN', eventId: req.params.eventId, unitCode: null });
+    await openStream(hub, req, reply, { role: 'ADMIN', sessionId: req.session!.id, eventId: req.params.eventId, unitCode: null });
   });
 }

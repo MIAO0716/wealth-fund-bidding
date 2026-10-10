@@ -41,14 +41,27 @@ if ($LASTEXITCODE -ne 0) { Stop-WithError '恢复前备份失败，已中止' }
 Write-Ok $before
 
 Write-Step '恢复数据'
-& (Join-Path $PgBin 'pg_restore.exe') -h 127.0.0.1 -p $cfg.dbPort -U postgres --clean --if-exists --no-owner --no-privileges -d $DbName $File *> (Join-Path $LogDir 'restore.log')
-if ($LASTEXITCODE -ne 0) { Write-Warn2 "pg_restore 有警告，详见 $LogDir\restore.log" }
+$restoreLog = Join-Path $LogDir ("restore-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+# 单事务 + 出错即停：任何错误都整体回滚，数据库保持恢复前的状态；服务保持停止
+& (Join-Path $PgBin 'pg_restore.exe') -h 127.0.0.1 -p $cfg.dbPort -U postgres --clean --if-exists --no-owner --no-privileges --single-transaction --exit-on-error -d $DbName $File *> $restoreLog
+if ($LASTEXITCODE -ne 0) {
+  Stop-WithError "恢复失败，已整体回滚：数据仍是恢复前的状态，系统保持停止。错误详见 $restoreLog 。确认无误后可运行「1-启动系统」继续使用当前数据。"
+}
+
+try {
+  $check = Invoke-Sql $cfg "SELECT CASE WHEN (SELECT count(*) FROM units) = 16 AND EXISTS (SELECT 1 FROM schema_migrations) THEN 'ok' ELSE 'bad' END"
+} catch { $check = 'bad' }
+if ($check -ne 'ok') { Stop-WithError "恢复后校验未通过（单位表或迁移记录异常），系统保持停止。恢复前的数据在 $before" }
 
 $f = $File.Replace("'", "''")
 $b = $before.Replace("'", "''")
-Invoke-Sql $cfg @"
+try {
+  Invoke-Sql $cfg @"
 UPDATE sessions SET revoked_at = now(), revoke_reason = '备份恢复后统一失效' WHERE role IN ('BIDDER', 'SCREEN') AND revoked_at IS NULL;
 UPDATE unit_credentials SET revoked_at = now() WHERE used_at IS NULL AND revoked_at IS NULL;
 INSERT INTO maintenance_log (action, details) VALUES ('RESTORE', jsonb_build_object('file', '$f', 'before', '$b'));
 "@ | Out-Null
+} catch {
+  Stop-WithError '作废旧会话失败，系统保持停止（避免旧手机继续报价）'
+}
 Write-Ok '恢复完成。请运行「1-启动系统」，并在管理端重新发放二维码、重新打开大屏链接。'

@@ -51,7 +51,7 @@ export async function buildApp(config: AppConfig, opts: { db?: Db; logger?: bool
           },
   });
   const log = (msg: string, err?: unknown) => (err ? app.log.error({ err }, msg) : app.log.info(msg));
-  const ctx: AppContext = { db, config, onCheckpoint: makeCheckpointer(config, db, log) };
+  const ctx: AppContext = { db, config, log, onCheckpoint: makeCheckpointer(config, db, log) };
   const hub = new RealtimeHub(db, config.databaseUrl, log);
 
   await app.register(cookie);

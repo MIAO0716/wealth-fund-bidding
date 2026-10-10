@@ -156,7 +156,7 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await shot(pd.page, 'phone-confirm');
   const t0 = Date.now();
   await modal.getByRole('button', { name: '确认提交' }).click();
-  await expect(pd.page.getByText('追加成功 · 服务器已确认')).toBeVisible();
+  await expect(pd.page.getByRole('heading', { name: '追加成功 · 服务器已确认' })).toBeVisible();
   await expect(pd.page.locator('.m-current')).toContainText('35');
 
   // 大屏 PD 行更新为 35%
@@ -174,7 +174,7 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await expect(mh.page.locator('.m-preview')).toContainText('15%');
   await mh.page.locator('.m-main-btn').click();
   await mh.page.locator('.modal').getByRole('button', { name: '确认提交' }).click();
-  await expect(mh.page.getByText('追加成功 · 服务器已确认')).toBeVisible();
+  await expect(mh.page.getByRole('heading', { name: '追加成功 · 服务器已确认' })).toBeVisible();
   await expect(screen.locator('.s-row', { hasText: '闵行' }).locator('.s-current')).toContainText('15');
   await shot(screen, 'screen-live');
   await shot(admin, 'admin-control');

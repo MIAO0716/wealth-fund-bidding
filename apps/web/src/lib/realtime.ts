@@ -5,6 +5,7 @@
  *    多开页面时连接被长连接占满，普通请求会排队，表现为大屏「有时很快、有时要等」）。
  * 3. 页面转入后台 10 秒后释放连接，回到前台立即重连并补齐快照。
  * 4. 心跳 15 秒；超过 30 秒无心跳判定断线，有限退避重连（1/2/4/8/10 秒）；SSE 连续失败时降级为每 2 秒拉取快照。
+ * 5. 服务端告知会话已失效（revoked）时不再重连，重新拉取快照以显示「需重新扫码/登录」。
  * localStorage 不保存任何竞标数据。
  */
 
@@ -28,7 +29,7 @@ const POLL_MS = 2_000;
 const BACKOFF = [1000, 2000, 4000, 8000, 10000];
 const HIDDEN_RELEASE_MS = 10_000;
 
-type StreamState = 'connecting' | 'live' | 'reconnecting' | 'failing' | 'offline' | 'suspended';
+type StreamState = 'connecting' | 'live' | 'reconnecting' | 'failing' | 'offline' | 'suspended' | 'revoked';
 
 interface StreamListener {
   onMessage(msg: RealtimeMessage): void;
@@ -106,6 +107,11 @@ class SharedStream {
       this.lastSeq = 0;
       for (const l of this.listeners) l.onResync();
     });
+    es.addEventListener('revoked', () => {
+      this.close();
+      this.setState('revoked');
+      for (const l of this.listeners) l.onHello();
+    });
     es.addEventListener('message', (ev) => {
       this.armHeartbeat();
       let msg: RealtimeMessage;
@@ -139,7 +145,7 @@ class SharedStream {
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectTimer || this.state === 'suspended') return;
+    if (this.reconnectTimer || this.state === 'suspended' || this.state === 'revoked') return;
     const delay = BACKOFF[Math.min(this.failures, BACKOFF.length - 1)];
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
@@ -180,7 +186,7 @@ class SharedStream {
   };
 
   private onOnline = () => {
-    if (!this.es && this.state !== 'suspended') {
+    if (!this.es && this.state !== 'suspended' && this.state !== 'revoked') {
       if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
       this.open();
@@ -231,6 +237,7 @@ export function useRealtime<T extends { seq: number }>(
         case 'failing':
           return 'polling';
         case 'offline':
+        case 'revoked':
           return 'offline';
         case 'reconnecting':
         case 'suspended':
@@ -264,13 +271,17 @@ export function useRealtime<T extends { seq: number }>(
           // 拉取失败：即使推送通道仍在，也无法确认最新数据——明确显示断线，保留最后一次已确认数据，并定时重试
           snapshotOk = false;
           refreshConn();
+          if (e instanceof ApiError && (e.status === 401 || e.status === 403 || e.status === 404)) {
+            // 会话失效或无权访问：重试没有意义，交由页面提示重新扫码/登录
+            setError(e);
+            return;
+          }
           if (!retryTimer) {
             retryTimer = setTimeout(() => {
               retryTimer = null;
               void loadSnapshot();
             }, 2000);
           }
-          if (e instanceof ApiError && (e.status === 401 || e.status === 403 || e.status === 404)) setError(e);
         } finally {
           loading = null;
         }

@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app';
+import { createAdmin } from '../src/services/auth';
 import {
   type Ctx,
   ack,
   bid,
   call,
+  cookieFrom,
   control,
   createFormalEvent,
   fullRows,
@@ -42,11 +44,14 @@ interface SseEvent {
 function connect(path: string, cookie: string, lastEventId?: string) {
   const events: SseEvent[] = [];
   const ac = new AbortController();
+  let ended = false;
+  let status = 0;
   const done = (async () => {
     const res = await fetch(base + path, {
       headers: { cookie, ...(lastEventId ? { 'last-event-id': lastEventId } : {}) },
       signal: ac.signal,
     });
+    status = res.status;
     const reader = res.body!.getReader();
     const dec = new TextDecoder();
     let buf = '';
@@ -71,9 +76,13 @@ function connect(path: string, cookie: string, lastEventId?: string) {
     } catch {
       // 主动断开
     }
+    ended = true;
   })();
   return {
     events,
+    /** 服务端已结束该连接 */
+    ended: () => ended,
+    status: () => status,
     messages: () => events.filter((e) => e.event === 'message').map((e) => e.data),
     close: async () => {
       ac.abort();
@@ -180,6 +189,90 @@ describe('实时推送', () => {
     await new Promise((r) => setTimeout(r, 300));
     expect(s.messages().filter((m) => m.type === 'DRAFT_UPDATED')).toHaveLength(0);
     await s.close();
+  });
+});
+
+describe('FIX-04 实时连接随访问权限失效', () => {
+  const pdStream = async (eventId: string, cookie: string) => {
+    const c = connect(`/api/v1/bidder/events/${eventId}/stream?since=${(await me(ctx, eventId, cookie)).seq}`, cookie);
+    await waitFor(() => c.events.some((e) => e.event === 'hello'));
+    return c;
+  };
+
+  it('领导换手机：旧手机连接收到 revoked 并关闭，之后的报价不再推送；旧会话无法重连', async () => {
+    const { eventId, pd } = await prepared();
+    const old = await pdStream(eventId, pd);
+    const pdNew = await joinUnit(ctx, eventId, 'PD');
+    await waitFor(() => old.ended(), 5000);
+    expect(old.events.some((e) => e.event === 'revoked')).toBe(true);
+    await ack(ctx, eventId, 'wealth', pdNew);
+    const r = await bid(ctx, eventId, 'wealth', pdNew, { targetIncreasePp: 35, expectedBidVersion: 0 });
+    expect(r.status).toBe(201);
+    expect(old.messages().filter((m) => m.type === 'BID_ACCEPTED')).toHaveLength(0);
+    const again = connect(`/api/v1/bidder/events/${eventId}/stream?since=0`, pd);
+    await waitFor(() => again.ended());
+    expect(again.status()).toBe(401);
+    // 新手机正常
+    const fresh = await pdStream(eventId, pdNew);
+    await fresh.close();
+  });
+
+  it('撤销提交后的事件一律不推给旧连接（同一快照判定）', async () => {
+    const { eventId, pd, mh } = await prepared();
+    const old = await pdStream(eventId, pd);
+    // 撤销与随后的报价背靠背提交
+    await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/units/PD/revoke`, { cookie: ctx.adminCookie, body: { reason: '测试' } });
+    await bid(ctx, eventId, 'wealth', mh, { targetIncreasePp: 10, expectedBidVersion: 0 });
+    await control(ctx, eventId, 'wealth', 'PAUSE');
+    await waitFor(() => old.ended(), 5000);
+    expect(old.messages().filter((m) => m.type === 'PROJECT_STATUS' || m.type === 'BID_ACCEPTED')).toHaveLength(0);
+  });
+
+  it('大屏凭证撤销后连接关闭；其他大屏不受影响', async () => {
+    const { eventId, screen } = await prepared();
+    const other = await joinScreen(ctx, eventId);
+    const s1 = connect(`/api/v1/screen/events/${eventId}/stream?since=0`, screen);
+    const s2 = connect(`/api/v1/screen/events/${eventId}/stream?since=0`, other);
+    await waitFor(() => s1.events.some((e) => e.event === 'hello') && s2.events.some((e) => e.event === 'hello'));
+    const keys = await call(ctx.app, 'GET', `/api/v1/admin/events/${eventId}/screen-keys`, { cookie: ctx.adminCookie });
+    const first = keys.body.keys[0];
+    await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/screen-keys/${first.id}/revoke`, { cookie: ctx.adminCookie, body: {} });
+    await waitFor(() => s1.ended(), 5000);
+    expect(s2.ended()).toBe(false);
+    await control(ctx, eventId, 'wealth', 'PAUSE');
+    await waitFor(() => s2.messages().some((m) => m.type === 'PROJECT_STATUS'));
+    await s2.close();
+  });
+
+  it('会话到期后约 3 秒内停止推送并关闭', async () => {
+    const { eventId, pd } = await prepared();
+    const old = await pdStream(eventId, pd);
+    await ctx.db.query(`UPDATE sessions SET expires_at = now() WHERE role = 'BIDDER' AND event_id = $1 AND unit_code = 'PD'`, [eventId]);
+    await waitFor(() => old.ended(), 5000);
+    expect(old.events.some((e) => e.event === 'revoked')).toBe(true);
+  });
+
+  it('FIX-03 重置管理员密码：该管理员的旧连接与旧 Cookie 失效，其他管理员不受影响', async () => {
+    const eventId = await createFormalEvent(ctx);
+    await createAdmin(ctx.db, 'admin2', '第二管理员', 'admin2-password-1');
+    const login = (password: string) =>
+      ctx.app.inject({ method: 'POST', url: '/api/v1/auth/admin/login', headers: { 'x-bidding-client': '1' }, payload: { username: 'admin2', password } });
+    const l1 = await login('admin2-password-1');
+    expect(l1.statusCode).toBe(200);
+    const a2 = cookieFrom(l1.headers['set-cookie']);
+    const s2 = connect(`/api/v1/admin/events/${eventId}/stream?since=0`, a2);
+    const s1 = connect(`/api/v1/admin/events/${eventId}/stream?since=0`, ctx.adminCookie);
+    await waitFor(() => s1.events.some((e) => e.event === 'hello') && s2.events.some((e) => e.event === 'hello'));
+
+    await createAdmin(ctx.db, 'admin2', '第二管理员', 'admin2-password-2');
+    await waitFor(() => s2.ended(), 5000);
+    expect((await call(ctx.app, 'GET', `/api/v1/admin/events/${eventId}/state`, { cookie: a2 })).status).toBe(401);
+    expect((await login('admin2-password-1')).statusCode).toBe(401);
+    expect((await login('admin2-password-2')).statusCode).toBe(200);
+    // 其他管理员的会话与连接照常
+    expect((await call(ctx.app, 'GET', `/api/v1/admin/events/${eventId}/state`, { cookie: ctx.adminCookie })).status).toBe(200);
+    expect(s1.ended()).toBe(false);
+    await s1.close();
   });
 });
 

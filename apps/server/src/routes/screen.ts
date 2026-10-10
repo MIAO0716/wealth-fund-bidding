@@ -31,6 +31,6 @@ export function registerScreenRoutes(api: FastifyInstance, deps: AppDeps): void 
   );
 
   api.get<{ Params: P }>('/screen/events/:eventId/stream', auth, async (req, reply) => {
-    await openStream(hub, req, reply, { role: 'SCREEN', eventId: req.params.eventId, unitCode: null });
+    await openStream(hub, req, reply, { role: 'SCREEN', sessionId: req.session!.id, eventId: req.params.eventId, unitCode: null });
   });
 }
