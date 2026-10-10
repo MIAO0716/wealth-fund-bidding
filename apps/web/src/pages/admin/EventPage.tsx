@@ -167,7 +167,7 @@ function SetupTab({ eventId, state, reload }: TabProps) {
             <input value={cfg.dataSource} onChange={(e) => set('dataSource', e.target.value)} />
           </label>
           <label className="field">
-            <span>二维码有效期（小时）</span>
+            <span>二维码有效期（小时，默认 720 = 30 天）</span>
             <input type="number" min={1} value={cfg.qrValidHours} onChange={(e) => set('qrValidHours', Number(e.target.value))} />
           </label>
           <label className="field">
@@ -185,6 +185,14 @@ function SetupTab({ eventId, state, reload }: TabProps) {
             </div>
             <span className="small">若组织者要求「每次只能追加5个百分点」，只勾选 +5。</span>
           </div>
+          <label className="field">
+            <span>会场 Wi-Fi 名称（选填，印在领导使用卡上，手机相机扫码即可连接）</span>
+            <input value={cfg.wifiSsid} onChange={(e) => set('wifiSsid', e.target.value)} placeholder="例如：Meeting-5G" />
+          </label>
+          <label className="field">
+            <span>会场 Wi-Fi 密码（开放网络留空）</span>
+            <input value={cfg.wifiPassword} onChange={(e) => set('wifiPassword', e.target.value)} />
+          </label>
           <label className="field">
             <span>首轮大屏展示底标与目标金额</span>
             <select value={cfg.showAmountsOnScreen ? '1' : '0'} onChange={(e) => set('showAmountsOnScreen', e.target.value === '1')}>

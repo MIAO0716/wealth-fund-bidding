@@ -143,6 +143,21 @@ export function screenUrl(publicBaseUrl: string, token: string, path = '/screen'
   return `${publicBaseUrl}${path}#k=${token}`;
 }
 
+/** 标准 Wi-Fi 二维码（手机相机扫码即可连接）；特殊字符按规范转义 */
+export function wifiQrText(ssid: string, password: string): string {
+  const esc = (s: string) => s.replace(/([\\;,:"])/g, '\\$1');
+  return password ? `WIFI:T:WPA;S:${esc(ssid)};P:${esc(password)};;` : `WIFI:T:nopass;S:${esc(ssid)};;`;
+}
+
+export async function wifiInfo(config: { wifiSsid: string; wifiPassword: string }) {
+  if (!config.wifiSsid) return null;
+  return {
+    ssid: config.wifiSsid,
+    password: config.wifiPassword,
+    qrDataUrl: await qrDataUrl(wifiQrText(config.wifiSsid, config.wifiPassword)),
+  };
+}
+
 export async function qrDataUrl(text: string): Promise<string> {
   return QRCode.toDataURL(text, { errorCorrectionLevel: 'M', margin: 2, width: 360 });
 }
@@ -238,8 +253,17 @@ export async function exchangeUnitCredential(ctx: AppContext, token: unknown, us
     const ev = await client.query('SELECT * FROM events WHERE id = $1 FOR UPDATE', [found.rows[0].event_id]);
     const r = await client.query('SELECT * FROM unit_credentials WHERE token_hash = $1 FOR UPDATE', [sha256(token)]);
     const cred = r.rows[0];
-    if (!cred || cred.used_at || cred.revoked_at || new Date(cred.expires_at).getTime() <= Date.now()) {
-      throw bizError('CREDENTIAL_INVALID');
+    if (!cred) throw bizError('CREDENTIAL_INVALID');
+    // 凭证持有者已知是哪家单位，告知单位名称与原因，便于现场处理
+    const unitName = UNIT_BY_CODE.get(cred.unit_code)?.name ?? cred.unit_code;
+    if (cred.used_at) {
+      throw bizError('CREDENTIAL_INVALID', `${unitName}的二维码已在一部手机上使用过。如需换手机，请联系工作人员点「换手机」后重新扫码。`, { unitName, reason: 'USED' });
+    }
+    if (cred.revoked_at) {
+      throw bizError('CREDENTIAL_INVALID', `${unitName}的这张二维码已作废（工作人员已重新发放），请扫描最新的二维码。`, { unitName, reason: 'REVOKED' });
+    }
+    if (new Date(cred.expires_at).getTime() <= Date.now()) {
+      throw bizError('CREDENTIAL_INVALID', `${unitName}的二维码已过期，请联系工作人员重新发放。`, { unitName, reason: 'EXPIRED' });
     }
     const cfg = readConfig(ev.rows[0]);
     await client.query('UPDATE unit_credentials SET used_at = now() WHERE id = $1', [cred.id]);

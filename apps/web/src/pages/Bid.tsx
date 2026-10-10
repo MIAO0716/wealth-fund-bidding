@@ -1,4 +1,4 @@
-import { ERROR_MESSAGES, PROJECT_STATUS_NAMES, type BidReceipt, type ProjectCode } from '@bidding/shared';
+import { ERROR_MESSAGES, type BidReceipt, type ProjectCode } from '@bidding/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ConnLine, DemoBadge, Modal } from '../components/ui';
 import { ApiError, api, errorText, newIdempotencyKey } from '../lib/api';
@@ -37,6 +37,15 @@ interface MeSnapshot {
   projects: Record<ProjectCode, MeProject>;
   myBids: Array<{ receiptNo: string; projectCode: ProjectCode; fromPp: number; toPp: number; targetWan: string; source: string; acceptedAt: string }>;
 }
+
+/** 领导端状态用语（不出现「草稿」等内部术语） */
+const LEADER_STATUS_TEXT: Record<MeProject['status'], string> = {
+  DRAFT: '等待首轮发布',
+  ROUND1_PUBLISHED: '首轮已发布，等待开始',
+  LIVE: '竞标中',
+  PAUSED: '已暂停',
+  LOCKED: '已结束',
+};
 
 interface Pending {
   key: string;
@@ -221,7 +230,7 @@ function BidMain({ eventId }: { eventId: string }) {
         : p.groupStatus === 'CLOSED'
           ? '本组已结束'
           : `等待本组（当前第${p.currentGroup ?? '—'}组）`
-      : PROJECT_STATUS_NAMES[p.status];
+      : LEADER_STATUS_TEXT[p.status];
 
   return (
     <div className="m-page">
@@ -246,6 +255,7 @@ function BidMain({ eventId }: { eventId: string }) {
       </header>
 
       <main className="m-body">
+        <UsageGuide />
         <section className="m-card">
           <div className="m-current-label">当前已确认增幅</div>
           {p.currentPp !== null ? (
@@ -499,3 +509,38 @@ function BidMain({ eventId }: { eventId: string }) {
   );
 }
 
+
+const GUIDE_KEY = 'bid-guide-dismissed';
+
+/** 首次进入的三步说明；关闭后本机不再显示（仅界面偏好，存 localStorage） */
+function UsageGuide() {
+  const [show, setShow] = useState(() => {
+    try {
+      return localStorage.getItem(GUIDE_KEY) !== '1';
+    } catch {
+      return true;
+    }
+  });
+  if (!show) return null;
+  const close = () => {
+    setShow(false);
+    try {
+      localStorage.setItem(GUIDE_KEY, '1');
+    } catch {
+      // 无痕模式等不可写时忽略
+    }
+  };
+  return (
+    <section className="m-card m-guide">
+      <div className="m-guide-head">
+        <span>使用说明（三步）</span>
+        <button onClick={close}>知道了</button>
+      </div>
+      <ol>
+        <li>首轮发布后，点「确认认领基础底标」</li>
+        <li>轮到本组时，选择追加档位，点「追加」，核对后「确认提交」</li>
+        <li>看到「追加成功 · 服务器已确认」即完成；增幅只增不减</li>
+      </ol>
+    </section>
+  );
+}

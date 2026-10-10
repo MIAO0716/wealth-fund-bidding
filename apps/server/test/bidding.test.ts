@@ -326,7 +326,11 @@ describe('A17 浦东改请求冒充闵行', () => {
     expect(first.statusCode).toBe(200);
     const second = await ex();
     expect(second.statusCode).toBe(401);
-    expect(JSON.parse(second.body).error.code).toBe('CREDENTIAL_INVALID');
+    const err = JSON.parse(second.body).error;
+    expect(err.code).toBe('CREDENTIAL_INVALID');
+    // 提示具体单位与处理办法
+    expect(err.message).toContain('浦东的二维码已在一部手机上使用过');
+    expect(err.details).toMatchObject({ unitName: '浦东', reason: 'USED' });
     const oldCookie = first.headers['set-cookie'] as string;
     const newCookie = await joinUnit(ctx, eventId, 'PD');
     const oldMe = await call(ctx.app, 'GET', `/api/v1/bidder/events/${eventId}/me`, { cookie: oldCookie.split(';')[0] });
@@ -491,5 +495,24 @@ describe('演示活动隔离', () => {
     const formal = await createFormalEvent(ctx);
     const seed = await call(ctx.app, 'POST', `/api/v1/admin/events/${formal}/demo/seed`, { cookie: ctx.adminCookie, body: {} });
     expect(seed.body.error.code).toBe('DEMO_ONLY');
+  });
+});
+
+describe('领导使用卡', () => {
+  it('Wi-Fi 二维码文本按规范转义；配置后随二维码一并返回', async () => {
+    const { wifiQrText } = await import('../src/services/auth');
+    expect(wifiQrText('Meeting-5G', 'pa;ss')).toBe('WIFI:T:WPA;S:Meeting-5G;P:pa\\;ss;;');
+    expect(wifiQrText('Open', '')).toBe('WIFI:T:nopass;S:Open;;');
+    const eventId = await createFormalEvent(ctx);
+    const none = await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/units/PD/credentials`, { cookie: ctx.adminCookie, body: {} });
+    expect(none.body.card).toMatchObject({ eventName: '测试竞标活动', wifi: null });
+    await call(ctx.app, 'PATCH', `/api/v1/admin/events/${eventId}/config`, { cookie: ctx.adminCookie, body: { wifiSsid: 'Meeting-5G', wifiPassword: '12345678' } });
+    const batch = await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/credentials/batch`, { cookie: ctx.adminCookie, body: {} });
+    expect(batch.body.credentials).toHaveLength(16);
+    expect(batch.body.card.wifi).toMatchObject({ ssid: 'Meeting-5G', password: '12345678' });
+    expect(batch.body.card.wifi.qrDataUrl.startsWith('data:image/png;base64,')).toBe(true);
+    // 默认二维码有效期 30 天
+    const days = (Date.parse(batch.body.credentials[0].expiresAt) - Date.now()) / 86400_000;
+    expect(Math.round(days)).toBe(30);
   });
 });

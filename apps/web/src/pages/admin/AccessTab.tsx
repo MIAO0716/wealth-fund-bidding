@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { type CardCredential, type CardInfo, LeaderCard, PrintCards } from '../../components/LeaderCards';
 import { Modal } from '../../components/ui';
 import { api, errorText } from '../../lib/api';
 import { fmtTime } from '../../lib/format';
@@ -16,11 +17,8 @@ interface UnitAccess {
   lastSeenAt: string | null;
 }
 interface Issued {
-  unitCode: string;
-  unitName: string;
-  joinUrl: string;
-  qrDataUrl: string;
-  expiresAt: string;
+  creds: CardCredential[];
+  card: CardInfo;
 }
 
 const CRED_LABEL: Record<UnitAccess['credentialStatus'], [string, string]> = {
@@ -34,7 +32,7 @@ const CRED_LABEL: Record<UnitAccess['credentialStatus'], [string, string]> = {
 export function AccessTab({ eventId, state, me }: TabProps) {
   const base = `/api/v1/admin/events/${eventId}`;
   const [units, setUnits] = useState<UnitAccess[] | null>(null);
-  const [issued, setIssued] = useState<Issued[] | null>(null);
+  const [issued, setIssued] = useState<Issued | null>(null);
   const [keys, setKeys] = useState<Array<{ id: string; label: string; revokedAt: string | null; createdAt: string }>>([]);
   const [newKey, setNewKey] = useState<{ label: string; screenUrl: string; qrDataUrl: string } | null>(null);
   const [label, setLabel] = useState('主屏');
@@ -63,15 +61,15 @@ export function AccessTab({ eventId, state, me }: TabProps) {
   const issueOne = (u: UnitAccess, revokeSessions: boolean) =>
     wrap(async () => {
       if (u.credentialStatus !== 'NONE' && !window.confirm(`重新发放将作废${u.unitName}此前未使用的二维码${revokeSessions ? '，并让已登录的手机下线' : ''}，继续？`)) return;
-      const r = await api.post<Issued>(`${base}/units/${u.unitCode}/credentials`, { revokeSessions });
-      setIssued([r]);
+      const r = await api.post<CardCredential & { card: CardInfo }>(`${base}/units/${u.unitCode}/credentials`, { revokeSessions });
+      setIssued({ creds: [r], card: r.card });
     });
 
   const issueAll = () =>
     wrap(async () => {
       if (!window.confirm('将为 16 家单位重新生成二维码，此前未使用的二维码全部作废（已登录的手机不受影响）。继续？')) return;
-      const r = await api.post<{ credentials: Issued[] }>(`${base}/credentials/batch`);
-      setIssued(r.credentials);
+      const r = await api.post<{ credentials: CardCredential[]; card: CardInfo }>(`${base}/credentials/batch`);
+      setIssued({ creds: r.credentials, card: r.card });
     });
 
   const revoke = (u: UnitAccess) =>
@@ -93,7 +91,7 @@ export function AccessTab({ eventId, state, me }: TabProps) {
         <h3>
           领导专属二维码
           <button className="btn btn-primary" onClick={() => void issueAll()} disabled={busy}>
-            批量生成 16 家二维码（打印）
+            批量生成 16 家领导使用卡（打印）
           </button>
         </h3>
         <p className="small muted">
@@ -202,32 +200,29 @@ export function AccessTab({ eventId, state, me }: TabProps) {
       {issued && (
         <Modal
           wide
-          title={`领导二维码（${issued.length} 家）`}
+          title={issued.creds.length === 1 ? `领导使用卡：${issued.creds[0].unitName}（可直接让领导扫屏幕上的二维码）` : `领导使用卡（${issued.creds.length} 家，每张 A4 打印两张）`}
           onClose={() => setIssued(null)}
           footer={
             <>
-              <button className="btn no-print" onClick={() => setIssued(null)}>
-                关闭（凭证不再显示）
+              <button className="btn" onClick={() => setIssued(null)}>
+                关闭（二维码不再显示）
               </button>
-              <button className="btn btn-primary no-print" onClick={() => window.print()}>
+              <button className="btn btn-primary" onClick={() => window.print()}>
                 打印
               </button>
             </>
           }
         >
-          <p className="small muted no-print">二维码一次性使用，请勿外传或投屏。有效期至 {fmtTime(issued[0]?.expiresAt, true)}。</p>
-          <div className="qr-grid" style={{ gridTemplateColumns: issued.length === 1 ? '1fr' : undefined }}>
-            {issued.map((c) => (
-              <div className="qr-card" key={c.unitCode}>
-                <b style={{ fontSize: 18 }}>{c.unitName}</b>
-                <div className="small muted">
-                  {state.event.config.name} · {c.unitCode}
-                </div>
-                <img src={c.qrDataUrl} alt={`${c.unitName}二维码`} />
-                {issued.length === 1 && <div className="small" style={{ wordBreak: 'break-all' }}>{c.joinUrl}</div>}
-              </div>
+          <p className="small muted">
+            二维码一次性使用、扫码后绑定该手机，有效期至 {fmtTime(issued.creds[0]?.expiresAt, true)}。请勿投屏或外传。
+            {!issued.card.wifi && ' 如需在卡上印「扫码连 Wi-Fi」，请先在「准备与配置」填写会场 Wi-Fi。'}
+          </p>
+          <div className="card-grid">
+            {issued.creds.map((c) => (
+              <LeaderCard key={c.unitCode} c={c} card={issued.card} />
             ))}
           </div>
+          <PrintCards creds={issued.creds} card={issued.card} />
         </Modal>
       )}
       {newKey && (

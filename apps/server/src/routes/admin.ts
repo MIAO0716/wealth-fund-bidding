@@ -12,6 +12,7 @@ import {
   revokeScreenKey,
   revokeUnitSessions,
   unitAccessStatus,
+  wifiInfo,
 } from '../services/auth';
 import { lookupRequest, submitBid } from '../services/bids';
 import { idemScope } from '../services/core';
@@ -192,17 +193,24 @@ export function registerAdminRoutes(api: FastifyInstance, deps: AppDeps): void {
 
   api.get<{ Params: P }>('/admin/events/:eventId/units', auth, async (req) => ({ units: await unitAccessStatus(ctx.db, req.params.eventId) }));
 
-  api.post<{ Params: P }>('/admin/events/:eventId/units/:unitCode/credentials', auth, async (req) =>
-    issueUnitCredential(ctx, req.params.eventId, actor(req), parseUnit(req.params.unitCode), {
+  /** 领导使用卡附带的信息：活动名称、Wi-Fi 二维码（如已配置） */
+  const cardInfo = async (eventId: string) => {
+    const cfg = readConfig(await getEventRow(ctx.db, eventId));
+    return { eventName: cfg.name, wifi: await wifiInfo(cfg) };
+  };
+
+  api.post<{ Params: P }>('/admin/events/:eventId/units/:unitCode/credentials', auth, async (req) => ({
+    ...(await issueUnitCredential(ctx, req.params.eventId, actor(req), parseUnit(req.params.unitCode), {
       revokeSessions: body<{ revokeSessions?: boolean }>(req).revokeSessions === true,
-    }),
-  );
+    })),
+    card: await cardInfo(req.params.eventId),
+  }));
 
   /** 一次为 16 家生成二维码（用于打印）；会作废此前未使用的二维码 */
   api.post<{ Params: P }>('/admin/events/:eventId/credentials/batch', auth, async (req) => {
     const out = [];
     for (const u of UNITS) out.push(await issueUnitCredential(ctx, req.params.eventId, actor(req), u.code));
-    return { credentials: out };
+    return { credentials: out, card: await cardInfo(req.params.eventId) };
   });
 
   api.post<{ Params: P }>('/admin/events/:eventId/units/:unitCode/revoke', auth, async (req) =>

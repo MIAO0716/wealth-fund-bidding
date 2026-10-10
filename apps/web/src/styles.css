@@ -1260,3 +1260,135 @@ textarea {
   font-size: 22px;
   letter-spacing: 2px;
 }
+
+/* ================================================================== 领导使用卡（打印每张 A4 两张） */
+
+.leader-card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+.lc-head {
+  background: linear-gradient(135deg, #d4142f, var(--red) 50%, #9e0c22);
+  color: #fff;
+  padding: 12px 18px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.lc-event {
+  font-size: 13px;
+  opacity: 0.9;
+}
+.lc-unit {
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: 3px;
+  white-space: nowrap;
+}
+.lc-unit small {
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+  margin-left: 8px;
+  color: var(--gold-soft);
+}
+.lc-body {
+  padding: 8px 18px 12px;
+}
+.lc-step {
+  display: grid;
+  grid-template-columns: 34px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px dashed var(--line);
+}
+.lc-step:last-child {
+  border-bottom: 0;
+}
+.lc-num {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--red);
+  color: #fff;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lc-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.lc-text b {
+  font-size: 16px;
+  color: var(--ink);
+}
+.lc-qr {
+  width: 110px;
+  height: 110px;
+}
+.lc-qr-main {
+  width: 170px;
+  height: 170px;
+}
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  gap: 16px;
+}
+.print-only {
+  display: none;
+}
+@media print {
+  @page {
+    size: A4;
+    margin: 10mm;
+  }
+  body > #root {
+    display: none !important;
+  }
+  .print-only {
+    display: block;
+  }
+  .print-only .leader-card {
+    height: 132mm;
+    margin-bottom: 8mm;
+    border: 1.5px solid #c8102e;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .print-only .leader-card:nth-child(2n) {
+    break-after: page;
+    page-break-after: always;
+  }
+}
+
+/* 手机端首次进入的三步说明 */
+.m-guide ol {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  line-height: 1.9;
+  font-size: 15px;
+}
+.m-guide-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 700;
+}
+.m-guide-head button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+}

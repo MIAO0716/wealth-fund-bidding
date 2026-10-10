@@ -24,6 +24,10 @@ export interface EventConfig {
   highValueConfirmPp: number;
   /** 首轮大屏是否展示底标与目标金额 */
   showAmountsOnScreen: boolean;
+  /** 会场 Wi-Fi 名称（填写后领导使用卡上印「扫码连 Wi-Fi」二维码；可留空） */
+  wifiSsid: string;
+  /** 会场 Wi-Fi 密码（开放网络留空） */
+  wifiPassword: string;
 }
 
 export type ScreenMode = 'FIRST_ROUND' | 'LIVE' | 'RESULTS';

@@ -25,10 +25,13 @@ export const DEFAULT_CONFIG: EventConfig = {
   amountBasis: '',
   statPeriod: '',
   dataSource: '',
-  qrValidHours: 168,
+  // 二维码一次性使用、扫码后绑定手机；默认 30 天有效，便于会前提前打印
+  qrValidHours: 720,
   allowedIncrementSteps: [...DEFAULT_ALLOWED_INCREMENT_STEPS],
   highValueConfirmPp: DEFAULT_HIGH_VALUE_CONFIRM_PP,
   showAmountsOnScreen: false,
+  wifiSsid: '',
+  wifiPassword: '',
 };
 
 const configPatchSchema = z
@@ -47,6 +50,8 @@ const configPatchSchema = z
     allowedIncrementSteps: z.array(z.number()),
     highValueConfirmPp: z.number().int().min(5).max(100000),
     showAmountsOnScreen: z.boolean(),
+    wifiSsid: z.string().max(64),
+    wifiPassword: z.string().max(64),
   })
   .partial()
   .strict();

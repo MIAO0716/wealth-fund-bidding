@@ -71,6 +71,17 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   });
   expect(c.ok()).toBe(true);
 
+  // 领导使用卡：配置会场 Wi-Fi 后批量生成，卡上印 Wi-Fi 二维码、单位二维码与三步说明
+  await req.patch(`/api/v1/admin/events/${eventId}/config`, { headers: H, data: { wifiSsid: 'Meeting-5G', wifiPassword: '12345678' } });
+  await admin.goto(`/admin/events/${eventId}/access`);
+  admin.once('dialog', (d) => void d.accept());
+  await admin.getByRole('button', { name: '批量生成 16 家领导使用卡（打印）' }).click();
+  await expect(admin.locator('.modal .leader-card')).toHaveCount(16);
+  await expect(admin.locator('.modal .leader-card').first()).toContainText('打开微信「扫一扫」');
+  await expect(admin.locator('.modal .leader-card').first()).toContainText('Meeting-5G');
+  await admin.locator('.modal .leader-card').first().screenshot({ path: `../../${SHOTS}/leader-card.png` });
+  await admin.getByRole('button', { name: '关闭（二维码不再显示）' }).click();
+
   // 大屏链接与二维码
   const key = await (await req.post(`/api/v1/admin/events/${eventId}/screen-keys`, { headers: H, data: { label: '主屏' } })).json();
   const issue = async (u: string) => (await (await req.post(`/api/v1/admin/events/${eventId}/units/${u}/credentials`, { headers: H, data: {} })).json()).joinUrl as string;
@@ -88,6 +99,11 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   const hp = await phone(browser, (await issue('HP')).replace(/^https?:\/\/[^/]+/, baseURL!));
   await expect(pd.page.getByText('首轮结果待现场发布')).toBeVisible();
   await expect(pd.page.locator('.m-unit')).toContainText('浦东');
+  // 首次进入显示三步说明，可关闭
+  await expect(pd.page.getByText('使用说明（三步）')).toBeVisible();
+  await shot(pd.page, 'phone-first-visit');
+  await pd.page.getByRole('button', { name: '知道了' }).click();
+  await expect(pd.page.getByText('使用说明（三步）')).toHaveCount(0);
 
   // ---------------------------------------------------------- 管理端发布理财首轮（界面操作）
   await admin.goto(`/admin/events/${eventId}/first-round`);
@@ -185,7 +201,7 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await admin.getByLabel('已与现场核对三组结果，确认锁定').check();
   await admin.getByRole('button', { name: '确认锁定' }).click();
   await expect(admin.locator('.chip', { hasText: '已锁定' })).toBeVisible();
-  await expect(pd.page.getByText('已锁定').first()).toBeVisible();
+  await expect(pd.page.locator('.m-tag', { hasText: '已结束' })).toBeVisible();
 
   // 结果大屏
   await admin.getByRole('button', { name: '最终结果' }).click();
@@ -207,6 +223,28 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await shot(admin, 'admin-first-round');
 
   for (const ctx of [adminCtx, screenCtx, pd.ctx, mh.ctx, hp.ctx]) await ctx.close();
+});
+
+test('同一二维码在第二部手机上扫码：提示单位与处理办法', async ({ browser }) => {
+  const adminCtx = await browser.newContext();
+  const req = adminCtx.request;
+  expect((await req.post('/api/v1/auth/admin/login', { headers: H, data: { username: 'admin', password: 'e2e-password-123' } })).ok()).toBe(true);
+  const ev = await (await req.post('/api/v1/admin/events', { headers: H, data: { config: CONFIG } })).json();
+  const url = (await (await req.post(`/api/v1/admin/events/${ev.event.id}/units/MH/credentials`, { headers: H, data: {} })).json()).joinUrl as string;
+  const first = await browser.newContext(PHONE);
+  const p1 = await first.newPage();
+  await p1.goto(url);
+  await p1.waitForURL('**/bid');
+  // 同一手机再次扫码：直接进入
+  await p1.goto(url);
+  await p1.waitForURL('**/bid');
+  // 另一部手机扫同一个码：说明是哪家单位、怎么处理
+  const second = await browser.newContext(PHONE);
+  const p2 = await second.newPage();
+  await p2.goto(url);
+  await expect(p2.getByText('闵行的二维码已在一部手机上使用过')).toBeVisible();
+  await expect(p2.getByText('换手机')).toBeVisible();
+  await Promise.all([adminCtx.close(), first.close(), second.close()]);
 });
 
 test('会话失效与非法入口有明确提示', async ({ browser }) => {
