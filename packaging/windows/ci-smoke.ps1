@@ -22,6 +22,7 @@ $env:STATE_FILE = Join-Path $env:RUNNER_TEMP 'smoke-state.json'
 $data = Join-Path $env:ProgramData 'BiddingSystem\data'
 
 function Start-Package([string]$label) {
+  Write-Host "==> 启动（$label）"
   $log = Join-Path $env:RUNNER_TEMP "start-$label.log"
   $p = Start-Process cmd.exe -ArgumentList "/c `"`"$pkg\1-启动系统.bat`" > `"$log`" 2>&1`"" -PassThru -WindowStyle Hidden
   for ($i = 0; $i -lt 240; $i++) {
@@ -32,17 +33,28 @@ function Start-Package([string]$label) {
     if ($p.HasExited) { break }
     Start-Sleep -Seconds 1
   }
-  Write-Host (Get-Content $log -Raw)
-  Get-ChildItem (Join-Path $data 'logs') -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "---- $($_.Name)"; Get-Content $_.FullName -Tail 40 }
+  Write-Host (Get-Content $log -Raw -ErrorAction SilentlyContinue)
+  Show-Logs
   throw "服务未能启动（$label）"
 }
 
-function Invoke-Bat([string]$name, [string]$arg = '') {
+function Invoke-Bat([string]$name, [string]$arg = '', [int]$timeoutSec = 300) {
   $log = Join-Path $env:RUNNER_TEMP "$name.log"
   $argStr = if ($arg) { " `"$arg`"" } else { '' }
-  $p = Start-Process cmd.exe -ArgumentList "/c `"`"$pkg\$name`"$argStr > `"$log`" 2>&1`"" -PassThru -WindowStyle Hidden -Wait
-  Write-Host "---- $name"
-  Write-Host (Get-Content $log -Raw)
+  Write-Host "==> 运行 $name"
+  # 不用 -Wait：它会等待整个进程树，而数据库本来就应在后台继续运行
+  $p = Start-Process cmd.exe -ArgumentList "/c `"`"$pkg\$name`"$argStr > `"$log`" 2>&1`"" -PassThru -WindowStyle Hidden
+  $null = $p.Handle
+  if (-not $p.WaitForExit($timeoutSec * 1000)) {
+    Write-Host (Get-Content $log -Raw -ErrorAction SilentlyContinue)
+    Show-Logs
+    throw "$name 超时（$timeoutSec 秒）"
+  }
+  Write-Host (Get-Content $log -Raw -ErrorAction SilentlyContinue)
+}
+
+function Show-Logs {
+  Get-ChildItem (Join-Path $data 'logs') -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "---- $($_.Name)"; Get-Content $_.FullName -Tail 40 }
 }
 
 function Test-Down {
@@ -52,6 +64,7 @@ function Test-Down {
 # 1. 首次启动：安装、初始化数据库、创建管理员、放行防火墙
 $null = Start-Package 'first'
 if (-not (Get-NetFirewallRule -DisplayName 'BiddingSystem-8080' -ErrorAction SilentlyContinue)) { throw '防火墙规则未创建' }
+Write-Host '==> 冒烟测试 setup'
 & node (Join-Path $repo 'tests\package\smoke.mjs') setup
 if ($LASTEXITCODE -ne 0) { throw '冒烟测试失败' }
 
