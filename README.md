@@ -11,12 +11,12 @@
 | 稿次 | 内容 | 状态 |
 | --- | --- | --- |
 | 第一稿 | 数据与规则：数据库、认证、首轮导入（JSON/CSV/Excel/手动）、发布冻结、状态机、加码事务、幂等、审计、实时事件与 SSE、自动化测试 | ✅ 已完成 |
-| 第二稿 | 现场界面：领导手机端、首轮大屏、实时大屏、结果大屏、管理端，SSE 断线恢复与轮询降级 | 进行中 |
-| 第三稿 | 正式使用准备：Excel 导出、备份恢复、Docker 部署、现场操作手册、验收场景全量跑测 | 待开始 |
+| 第二稿 | 现场界面：领导手机端、首轮大屏、实时大屏、结果大屏、管理端，SSE 断线恢复与轮询降级；真实多浏览器 E2E | ✅ 已完成 |
+| 第三稿 | 正式使用准备：Excel 导出、备份恢复、Docker 部署、现场操作手册、验收场景全量跑测 | 进行中 |
 
 ## 技术结构
 
-- 前端 React + TypeScript + Vite（`apps/web`，第二稿）
+- 前端 React + TypeScript + Vite（`apps/web`），系统字体、无外部 CDN 依赖
 - 后端 Node.js + TypeScript + Fastify（`apps/server`）
 - 数据库 PostgreSQL（`apps/server/migrations`）
 - 共享规则、类型、错误码（`packages/shared`）：前后端共用，后端独立校验，不依赖前端
@@ -44,16 +44,46 @@ cp .env.example .env         # 修改 DATABASE_URL、PUBLIC_BASE_URL 等
 npm run db:migrate
 npm run admin:create -- --username admin --name 工作人员
 
-# 5. 启动后端（开发模式，自动重载）
+# 5. 启动后端（开发模式，自动重载，默认 8080 端口）
 npm run dev:server
+
+# 6. 另开终端启动前端开发服务器（5173 端口，/api 自动代理到 8080）
+npm run dev:web
 ```
+
+浏览器打开 `http://localhost:5173/admin` 登录管理端。手机联调时把 `.env` 中 `PUBLIC_BASE_URL` 设为电脑的局域网地址（如 `http://192.168.1.10:5173`），二维码才能在手机上打开。
+
+## 页面与角色
+
+| 页面 | 地址 | 谁使用 | 进入方式 |
+| --- | --- | --- | --- |
+| 管理端 | `/admin` | 工作人员 | 账号密码登录 |
+| 领导手机端 | `/join` → `/bid` | 16 家单位领导 | 扫描专属二维码（一次性凭证，扫码后绑定该手机） |
+| 大屏（跟随管理端切换） | `/screen` | 投屏电脑 | 管理端「二维码与大屏」生成的只读链接 |
+| 首轮大屏 / 实时大屏 / 结果大屏 | `/screen/first-round`、`/screen/live`、`/screen/results`（可加 `?project=wealth`） | 投屏电脑 | 同上，打开过大屏链接后可直接访问 |
+
+界面截图（E2E 自动生成）：
+
+| 实时大屏 | 首轮大屏 | 结果大屏 |
+| --- | --- | --- |
+| ![实时大屏](docs/screenshots/screen-live.png) | ![首轮大屏](docs/screenshots/screen-first-round.png) | ![结果大屏](docs/screenshots/screen-results.png) |
+
+| 手机端 | 二次确认 | 管理端 |
+| --- | --- | --- |
+| ![手机端](docs/screenshots/phone-bid.png) | ![二次确认](docs/screenshots/phone-confirm.png) | ![管理端](docs/screenshots/admin-control.png) |
 
 ## 测试
 
 ```bash
 npm test          # 规则单元测试 + 服务端集成测试（真实 PostgreSQL）
 npm run typecheck
+npm run build && npm run test:e2e   # 真实多浏览器全流程（需 E2E 库 bidding_e2e，会被清空）
 ```
+
+E2E 使用 Playwright，同时打开 5 个互相独立的浏览器会话：管理端（1440×900）、大屏（1920×1080）、浦东/闵行/黄浦三部手机（390×844），
+走完「发布首轮 → 认领底标 → 开组 → 手机两步确认加码 → 大屏同步 → 结束三组自动暂停 → 锁定 → 结果大屏 → 发布基金」全流程，
+并检查手机无横向溢出、大屏 16 家完整可见。第二稿实测：手机点击确认到大屏显示新增幅约 150–170 毫秒（本机）。
+如本机 Chromium 不在默认位置，设置 `CHROMIUM_PATH` 指向浏览器可执行文件。
 
 测试使用 `TEST_DATABASE_URL`（默认 `postgres://bid:bid@localhost:5432/bidding_test`），每个测试文件开始时会清空该库。
 
