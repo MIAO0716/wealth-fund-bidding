@@ -7,11 +7,24 @@ import type { AppConfig } from '../config';
 import type { Db } from '../db/pool';
 import { shanghaiDateCompact } from '../lib/time';
 
+const LABEL_WORDS: Array<[string, string]> = [
+  ['首轮发布', 'round1-published'],
+  ['项目锁定', 'locked'],
+  ['手动检查点', 'manual'],
+];
+
+export function asciiLabel(label: string): string {
+  let s = label;
+  for (const [zh, en] of LABEL_WORDS) s = s.replace(zh, en);
+  return s.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'checkpoint';
+}
+
 export function makeCheckpointer(config: AppConfig, db: Db, log: (msg: string, err?: unknown) => void) {
   return (eventId: string, label: string) => {
     if (!config.backupDir) return;
     void (async () => {
-      const safeLabel = label.replace(/[^\p{L}\p{N}_-]/gu, '_');
+      // 文件名只用 ASCII：Windows 非中文区域设置下 pg_dump 无法打开含中文的路径
+      const safeLabel = asciiLabel(label);
       const file = join(config.backupDir, `checkpoint-${shanghaiDateCompact()}-${eventId.slice(0, 8)}-${safeLabel}.dump`);
       try {
         await mkdir(config.backupDir, { recursive: true });

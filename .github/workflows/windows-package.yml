@@ -1,0 +1,76 @@
+name: Windows 一键部署包
+
+# 在 GitHub 的 Windows 构建机上：构建 → 组装便携安装包 → 用 .bat 实际启动/停止/备份/恢复验证 → 发布到 Releases
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 验证通过后发布到 Releases 页面
+        type: boolean
+        default: true
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows-package:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.3'
+          cache: npm
+
+      - name: 安装依赖并构建
+        run: |
+          npm ci
+          npm run build
+
+      - name: 组装安装包
+        shell: pwsh
+        run: ./packaging/windows/build.ps1
+
+      - name: 在 Windows 上验证安装包（中文带空格路径）
+        shell: pwsh
+        run: ./packaging/windows/ci-smoke.ps1
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: BiddingSystem-windows-x64
+          path: dist-package/BiddingSystem-windows-x64.zip
+          retention-days: 30
+
+      - name: 发布到 Releases
+        if: github.ref_type == 'tag' || inputs.publish_release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = if ('${{ github.ref_type }}' -eq 'tag') { '${{ github.ref_name }}' } else { 'build-' + (Get-Date -Format 'yyyyMMdd-HHmm') }
+          $version = (Get-Content dist-package/build-info.txt -Raw).Trim()
+          $notes = @"
+          Windows 一键部署包（$version）
+
+          使用方法：下载 BiddingSystem-windows-x64.zip → 解压 → 双击「1-启动系统」。
+          无需安装 Node.js、数据库或其他软件；首次启动会自动初始化并让你设置管理员密码。
+          详见压缩包内「使用说明.txt」。
+
+          本版本已在 GitHub Windows 构建机上通过启动、扫码、加码、锁定、导出、停止、重启、备份、恢复、重置密码的自动验证。
+          "@
+          gh release create $tag dist-package/BiddingSystem-windows-x64.zip --title "Windows 一键部署包 $tag" --notes $notes --target '${{ github.sha }}'
+
+      - name: 失败时上传日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-package-logs
+          path: |
+            C:\ProgramData\BiddingSystem\data\logs
+            ${{ runner.temp }}\*.log
+          if-no-files-found: ignore

@@ -27,11 +27,11 @@ describe('自动检查点', () => {
     const eventId = await createFormalEvent(ctx);
     await importRows(ctx, eventId, fullRows('wealth'));
     await publish(ctx, eventId, 'wealth');
-    await waitFor(() => readdirSync(backupDir).some((f) => f.includes('首轮发布')));
+    await waitFor(() => readdirSync(backupDir).some((f) => f.includes('round1-published')));
     await control(ctx, eventId, 'wealth', 'START');
     await control(ctx, eventId, 'wealth', 'PAUSE');
     await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true });
-    await waitFor(() => readdirSync(backupDir).some((f) => f.includes('项目锁定')));
+    await waitFor(() => readdirSync(backupDir).some((f) => f.includes('locked')));
     await waitFor(async () => (await ctx.db.query(`SELECT count(*)::int AS n FROM maintenance_log WHERE action = 'CHECKPOINT'`)).rows[0].n >= 2);
     const m = await call(ctx.app, 'GET', '/api/v1/admin/maintenance', { cookie: ctx.adminCookie });
     expect(m.body.backupEnabled).toBe(true);
