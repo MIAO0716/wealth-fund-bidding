@@ -1,9 +1,10 @@
 /**
  * 快照 + SSE 实时同步：
- * 1. 先取带 seq 的全量快照，再以 since=seq 订阅事件流，避免快照与订阅之间漏消息。
- * 2. 收到新序列的消息后重新拉取快照（服务端权威数据），忽略重复与旧序列。
- * 3. 心跳 15 秒；超过 30 秒无心跳判定断线，有限退避重连（1/2/4/8/10 秒）。
- * 4. SSE 连续失败时降级为每 2 秒拉取快照，并继续尝试恢复 SSE。
+ * 1. 先取带 seq 的全量快照，再订阅事件流；收到新序列的消息后重新拉取快照（服务端权威数据），忽略重复与旧序列。
+ * 2. 同一页面内同一事件流只建一条 SSE 连接，所有组件共享（局域网 http 下浏览器对同一地址最多 6 条连接，
+ *    多开页面时连接被长连接占满，普通请求会排队，表现为大屏「有时很快、有时要等」）。
+ * 3. 页面转入后台 10 秒后释放连接，回到前台立即重连并补齐快照。
+ * 4. 心跳 15 秒；超过 30 秒无心跳判定断线，有限退避重连（1/2/4/8/10 秒）；SSE 连续失败时降级为每 2 秒拉取快照。
  * localStorage 不保存任何竞标数据。
  */
 
@@ -25,6 +26,178 @@ export interface RealtimeResult<T> {
 const HEARTBEAT_TIMEOUT_MS = 30_000;
 const POLL_MS = 2_000;
 const BACKOFF = [1000, 2000, 4000, 8000, 10000];
+const HIDDEN_RELEASE_MS = 10_000;
+
+type StreamState = 'connecting' | 'live' | 'reconnecting' | 'failing' | 'offline' | 'suspended';
+
+interface StreamListener {
+  onMessage(msg: RealtimeMessage): void;
+  /** 连接（重新）建立：订阅方应补齐快照 */
+  onHello(): void;
+  onHeartbeat(): void;
+  onResync(): void;
+  onState(state: StreamState): void;
+}
+
+/** 一条共享的 SSE 连接 */
+class SharedStream {
+  private es: EventSource | null = null;
+  private listeners = new Set<StreamListener>();
+  private lastSeq = 0;
+  private failures = 0;
+  private state: StreamState = 'connecting';
+  private hbTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private hiddenTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(private readonly url: string, private readonly onEmpty: () => void) {
+    document.addEventListener('visibilitychange', this.onVisibility);
+    window.addEventListener('online', this.onOnline);
+  }
+
+  attach(l: StreamListener, since: number): void {
+    this.listeners.add(l);
+    this.lastSeq = Math.max(this.lastSeq, since);
+    if (!this.es && !this.reconnectTimer && this.state !== 'suspended') {
+      this.open();
+    } else {
+      l.onState(this.state);
+      // 加入已在运行的连接：期间可能已有消息推送给其他订阅方，立即补齐一次快照
+      if (this.state === 'live') l.onHello();
+    }
+  }
+
+  detach(l: StreamListener): void {
+    this.listeners.delete(l);
+    if (this.listeners.size > 0) return;
+    this.close();
+    document.removeEventListener('visibilitychange', this.onVisibility);
+    window.removeEventListener('online', this.onOnline);
+    this.onEmpty();
+  }
+
+  private setState(s: StreamState): void {
+    this.state = s;
+    for (const l of this.listeners) l.onState(s);
+  }
+
+  private open(): void {
+    this.es?.close();
+    const sep = this.url.includes('?') ? '&' : '?';
+    const es = new EventSource(`${this.url}${sep}since=${this.lastSeq}`, { withCredentials: true });
+    this.es = es;
+    es.addEventListener('hello', () => {
+      this.failures = 0;
+      this.setState('live');
+      this.armHeartbeat();
+      for (const l of this.listeners) l.onHello();
+    });
+    es.addEventListener('heartbeat', (ev) => {
+      try {
+        const d = JSON.parse((ev as MessageEvent).data);
+        if (typeof d.lastSeq === 'number') this.lastSeq = Math.max(this.lastSeq, d.lastSeq);
+      } catch {
+        // 忽略
+      }
+      this.armHeartbeat();
+      for (const l of this.listeners) l.onHeartbeat();
+    });
+    es.addEventListener('resync', () => {
+      this.lastSeq = 0;
+      for (const l of this.listeners) l.onResync();
+    });
+    es.addEventListener('message', (ev) => {
+      this.armHeartbeat();
+      let msg: RealtimeMessage;
+      try {
+        msg = JSON.parse((ev as MessageEvent).data);
+      } catch {
+        return;
+      }
+      this.lastSeq = Math.max(this.lastSeq, msg.seq);
+      for (const l of this.listeners) l.onMessage(msg);
+    });
+    es.onerror = () => {
+      // 由我们控制退避，不使用浏览器默认的无限重试
+      this.es?.close();
+      this.es = null;
+      this.failures++;
+      this.setState(this.failures >= 3 ? 'failing' : 'reconnecting');
+      this.scheduleReconnect();
+    };
+  }
+
+  private armHeartbeat(): void {
+    if (this.hbTimer) clearTimeout(this.hbTimer);
+    this.hbTimer = setTimeout(() => {
+      // 超过 30 秒无心跳：判定断线并重连
+      this.es?.close();
+      this.es = null;
+      this.setState('offline');
+      this.scheduleReconnect();
+    }, HEARTBEAT_TIMEOUT_MS);
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer || this.state === 'suspended') return;
+    const delay = BACKOFF[Math.min(this.failures, BACKOFF.length - 1)];
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.open();
+    }, delay);
+  }
+
+  private close(): void {
+    this.es?.close();
+    this.es = null;
+    if (this.hbTimer) clearTimeout(this.hbTimer);
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.hiddenTimer) clearTimeout(this.hiddenTimer);
+    this.hbTimer = this.reconnectTimer = this.hiddenTimer = null;
+  }
+
+  /** 后台超过 10 秒释放连接；回到前台立即重连（hello 后各订阅方补齐快照） */
+  private onVisibility = () => {
+    if (document.visibilityState === 'hidden') {
+      if (!this.hiddenTimer) {
+        this.hiddenTimer = setTimeout(() => {
+          this.hiddenTimer = null;
+          this.close();
+          this.state = 'suspended';
+        }, HIDDEN_RELEASE_MS);
+      }
+      return;
+    }
+    if (this.hiddenTimer) {
+      clearTimeout(this.hiddenTimer);
+      this.hiddenTimer = null;
+    }
+    if (this.state === 'suspended') {
+      this.state = 'connecting';
+      this.setState('reconnecting');
+      this.open();
+    }
+  };
+
+  private onOnline = () => {
+    if (!this.es && this.state !== 'suspended') {
+      if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+      this.open();
+    }
+  };
+}
+
+const streams = new Map<string, SharedStream>();
+
+function getStream(url: string): SharedStream {
+  let s = streams.get(url);
+  if (!s) {
+    s = new SharedStream(url, () => streams.delete(url));
+    streams.set(url, s);
+  }
+  return s;
+}
 
 export function useRealtime<T extends { seq: number }>(
   snapshotUrl: string | null,
@@ -43,18 +216,30 @@ export function useRealtime<T extends { seq: number }>(
   useEffect(() => {
     if (!snapshotUrl || !streamUrl) return;
     let disposed = false;
-    let es: EventSource | null = null;
-    let failures = 0;
-    let hbTimer: ReturnType<typeof setTimeout> | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let streamState: StreamState = 'connecting';
     let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let loading: Promise<void> | null = null;
     let pendingReload = false;
-    // SSE 是否处于正常推送状态
-    let esLive = false;
-    let everLive = false;
-    // 快照拉取失败后的重试
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let snapshotOk = true;
+
+    const deriveConn = (): ConnState => {
+      if (!snapshotOk) return 'offline';
+      switch (streamState) {
+        case 'live':
+          return 'live';
+        case 'failing':
+          return 'polling';
+        case 'offline':
+          return 'offline';
+        case 'reconnecting':
+        case 'suspended':
+          return 'reconnecting';
+        default:
+          return 'connecting';
+      }
+    };
+    const refreshConn = () => !disposed && setConn(deriveConn());
 
     const loadSnapshot = async (): Promise<void> => {
       if (loading) {
@@ -70,13 +255,15 @@ export function useRealtime<T extends { seq: number }>(
             seqRef.current = snap.seq;
             setData(snap);
           }
+          snapshotOk = true;
           setError(null);
           setLastSyncAt(Date.now());
-          setConn(esLive ? 'live' : pollTimer ? 'polling' : everLive ? 'reconnecting' : 'connecting');
+          refreshConn();
         } catch (e) {
           if (disposed) return;
           // 拉取失败：即使推送通道仍在，也无法确认最新数据——明确显示断线，保留最后一次已确认数据，并定时重试
-          setConn('offline');
+          snapshotOk = false;
+          refreshConn();
           if (!retryTimer) {
             retryTimer = setTimeout(() => {
               retryTimer = null;
@@ -84,12 +271,11 @@ export function useRealtime<T extends { seq: number }>(
             }, 2000);
           }
           if (e instanceof ApiError && (e.status === 401 || e.status === 403 || e.status === 404)) setError(e);
-          throw e;
         } finally {
           loading = null;
         }
       })();
-      await loading.catch(() => {});
+      await loading;
       if (pendingReload && !disposed) {
         pendingReload = false;
         await loadSnapshot();
@@ -97,104 +283,46 @@ export function useRealtime<T extends { seq: number }>(
     };
     reloadRef.current = () => void loadSnapshot();
 
-    const armHeartbeat = () => {
-      if (hbTimer) clearTimeout(hbTimer);
-      hbTimer = setTimeout(() => {
-        // 超过 30 秒无心跳：判定断线并重连
-        esLive = false;
-        setConn('offline');
-        reconnect();
-      }, HEARTBEAT_TIMEOUT_MS);
-    };
-
     const startPolling = () => {
-      if (pollTimer) return;
-      setConn('polling');
-      pollTimer = setInterval(() => void loadSnapshot(), POLL_MS);
+      if (!pollTimer) pollTimer = setInterval(() => void loadSnapshot(), POLL_MS);
     };
     const stopPolling = () => {
       if (pollTimer) clearInterval(pollTimer);
       pollTimer = null;
     };
 
-    const open = () => {
-      if (disposed) return;
-      es?.close();
-      const sep = streamUrl.includes('?') ? '&' : '?';
-      es = new EventSource(`${streamUrl}${sep}since=${seqRef.current}`, { withCredentials: true });
-      es.addEventListener('hello', () => {
-        esLive = true;
-        everLive = true;
-        failures = 0;
-        stopPolling();
-        setConn('live');
-        setLastSyncAt(Date.now());
-        armHeartbeat();
-      });
-      es.addEventListener('heartbeat', () => {
-        setLastSyncAt(Date.now());
-        armHeartbeat();
-      });
-      es.addEventListener('resync', () => {
-        seqRef.current = 0;
-        void loadSnapshot();
-      });
-      es.addEventListener('message', (ev) => {
-        armHeartbeat();
-        let msg: RealtimeMessage;
-        try {
-          msg = JSON.parse((ev as MessageEvent).data);
-        } catch {
-          return;
-        }
+    const listener: StreamListener = {
+      onMessage: (msg) => {
         // 忽略重复与旧序列
         if (msg.seq <= seqRef.current) return;
         onMessageRef.current?.(msg);
         void loadSnapshot();
-      });
-      es.onerror = () => {
-        // 由我们控制退避，不使用浏览器默认的无限重试
-        es?.close();
-        es = null;
-        esLive = false;
-        failures++;
-        if (failures >= 3) startPolling();
-        else setConn('reconnecting');
-        reconnect();
-      };
+      },
+      onHello: () => void loadSnapshot(),
+      onHeartbeat: () => setLastSyncAt(Date.now()),
+      onResync: () => {
+        seqRef.current = 0;
+        void loadSnapshot();
+      },
+      onState: (s) => {
+        streamState = s;
+        if (s === 'failing') startPolling();
+        if (s === 'live') stopPolling();
+        refreshConn();
+      },
     };
 
-    const reconnect = () => {
-      if (disposed || reconnectTimer) return;
-      es?.close();
-      es = null;
-      const delay = BACKOFF[Math.min(failures, BACKOFF.length - 1)];
-      reconnectTimer = setTimeout(async () => {
-        reconnectTimer = null;
-        // 先补齐快照，再从最新序列订阅
-        await loadSnapshot();
-        open();
-      }, delay);
-    };
-
+    const stream = getStream(streamUrl);
     setConn('connecting');
-    void loadSnapshot().then(open);
-
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') void loadSnapshot();
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    window.addEventListener('online', onVisible);
+    void loadSnapshot().then(() => {
+      if (!disposed) stream.attach(listener, seqRef.current);
+    });
 
     return () => {
       disposed = true;
-      es?.close();
-      if (hbTimer) clearTimeout(hbTimer);
-      if (reconnectTimer) clearTimeout(reconnectTimer);
+      stream.detach(listener);
       if (retryTimer) clearTimeout(retryTimer);
       stopPolling();
-      document.removeEventListener('visibilitychange', onVisible);
-      window.removeEventListener('online', onVisible);
     };
   }, [snapshotUrl, streamUrl]);
 

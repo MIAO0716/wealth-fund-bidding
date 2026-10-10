@@ -1398,3 +1398,80 @@ textarea {
   color: var(--muted);
   font-size: 14px;
 }
+
+/* 实时大屏：当前开放组放大，其余两组紧凑显示 */
+.s-groups {
+  transition: grid-template-columns 0.4s ease;
+}
+.s-groups.focus .s-group.open .s-group-name {
+  font-size: 40px;
+}
+.s-groups.focus .s-group.open .s-group-meta {
+  font-size: 24px;
+}
+.s-groups.focus .s-group.open .s-cols,
+.s-groups.focus .s-group.open .s-row {
+  grid-template-columns: 84px 1fr 150px 240px;
+}
+.s-groups.focus .s-group.open .s-cols {
+  font-size: 20px;
+}
+.s-groups.focus .s-group.open .s-rank {
+  font-size: 40px;
+}
+.s-groups.focus .s-group.open .s-unit {
+  font-size: 42px;
+  letter-spacing: 6px;
+}
+.s-groups.focus .s-group.open .s-badge {
+  font-size: 18px;
+  padding: 4px 12px;
+}
+.s-groups.focus .s-group.open .s-first {
+  font-size: 32px;
+}
+.s-groups.focus .s-group.open .s-current {
+  font-size: 76px;
+}
+.s-groups.focus .s-group.dim .s-group-head {
+  padding: 14px 16px 10px;
+}
+.s-groups.focus .s-group.dim .s-group-name {
+  font-size: 26px;
+  letter-spacing: 2px;
+}
+.s-groups.focus .s-group.dim .s-group-state {
+  font-size: 14px;
+}
+.s-groups.focus .s-group.dim .s-group-meta {
+  font-size: 15px;
+  flex-direction: column;
+  gap: 2px;
+}
+.s-groups.focus .s-group.dim .s-cols,
+.s-groups.focus .s-group.dim .s-row {
+  grid-template-columns: 40px 1fr 64px 96px;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+.s-groups.focus .s-group.dim .s-cols {
+  font-size: 13px;
+}
+.s-groups.focus .s-group.dim .s-rank {
+  font-size: 22px;
+}
+.s-groups.focus .s-group.dim .s-unit {
+  font-size: 24px;
+  letter-spacing: 1px;
+  gap: 6px;
+}
+.s-groups.focus .s-group.dim .s-badge {
+  font-size: 11px;
+  padding: 2px 6px;
+}
+.s-groups.focus .s-group.dim .s-first {
+  font-size: 18px;
+}
+.s-groups.focus .s-group.dim .s-current {
+  font-size: 34px;
+}
