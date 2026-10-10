@@ -15,6 +15,7 @@ import { useRealtime } from '../../lib/realtime';
 import type { AdminInfo } from './AdminApp';
 import { AccessTab } from './AccessTab';
 import { ControlTab } from './ControlTab';
+import { ExportTab } from './ExportTab';
 import { FirstRoundTab } from './FirstRoundTab';
 import { MonitorTab } from './MonitorTab';
 
@@ -67,6 +68,7 @@ export function EventPage({ me }: { me: AdminInfo }) {
           ['control', '现场控制'],
           ['access', '二维码与大屏'],
           ['monitor', '监控与审计'],
+          ['export', '导出与备份'],
         ].map(([path, label]) => (
           <NavLink key={path} to={`/admin/events/${eventId}/${path}`} className={({ isActive }) => `a-tab ${isActive ? 'on' : ''}`} style={{ textDecoration: 'none' }}>
             {label}
@@ -80,6 +82,7 @@ export function EventPage({ me }: { me: AdminInfo }) {
         <Route path="control" element={<ControlTab {...props} />} />
         <Route path="access" element={<AccessTab {...props} />} />
         <Route path="monitor" element={<MonitorTab {...props} />} />
+        <Route path="export" element={<ExportTab {...props} />} />
       </Routes>
     </>
   );

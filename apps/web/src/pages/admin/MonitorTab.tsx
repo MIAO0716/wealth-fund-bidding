@@ -48,6 +48,7 @@ const ACTION_LABEL: Record<string, string> = {
   SCREEN_KEY_REVOKED: '撤销大屏链接',
   SCREEN_MODE: '切换大屏',
   DEMO_SEEDED: '填充演示数据',
+  EXPORT: '导出',
 };
 
 export function MonitorTab({ eventId, state }: TabProps) {

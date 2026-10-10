@@ -21,7 +21,9 @@
     "typecheck": "tsc -p packages/shared && tsc -p apps/server && tsc -p apps/web",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test -c tests/e2e/playwright.config.ts"
+    "test:e2e": "playwright test -c tests/e2e/playwright.config.ts",
+    "templates": "npm run templates -w apps/server",
+    "perf": "node tests/perf/load.mjs"
   },
   "devDependencies": {
     "@types/node": "22.20.5",

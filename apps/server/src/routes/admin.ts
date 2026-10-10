@@ -27,6 +27,7 @@ import {
   toSummary,
   updateConfig,
 } from '../services/events';
+import { collectExport, toCsv, toXlsx } from '../services/exports';
 import { parseUpload } from '../services/fileparse';
 import { commitImport, listBatches, manualEdit, validateImport } from '../services/imports';
 import {
@@ -43,6 +44,11 @@ import { adminFirstRound, adminState } from '../services/views';
 import { openStream } from './sse';
 
 type P = { eventId: string; projectCode: string; unitCode: string; key: string; keyId: string };
+
+/** 附件文件名：ASCII 兜底 + RFC 5987 中文文件名 */
+function attachment(fallback: string, name: string): string {
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(name).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())}`;
+}
 
 export function registerAdminRoutes(api: FastifyInstance, deps: AppDeps): void {
   const { ctx, hub } = deps;
@@ -107,14 +113,14 @@ export function registerAdminRoutes(api: FastifyInstance, deps: AppDeps): void {
   api.get('/admin/first-round/template.xlsx', auth, async (_req, reply) =>
     reply
       .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-      .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent('首轮数据模板.xlsx')}`)
+      .header('Content-Disposition', attachment('first-round-template.xlsx', '首轮数据模板.xlsx'))
       .send(await templateXlsx()),
   );
 
   api.get('/admin/first-round/template.csv', auth, async (_req, reply) =>
     reply
       .header('Content-Type', 'text/csv; charset=utf-8')
-      .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent('首轮数据模板.csv')}`)
+      .header('Content-Disposition', attachment('first-round-template.csv', '首轮数据模板.csv'))
       .send(templateCsv()),
   );
 
@@ -257,6 +263,59 @@ export function registerAdminRoutes(api: FastifyInstance, deps: AppDeps): void {
         eventSequence: l.event_sequence === null ? null : Number(l.event_sequence),
         createdAt: toIso(l.created_at),
       })),
+    };
+  });
+
+  // ------------------------------------------------------------ 导出与备份
+
+  const CSV_SHEETS: Record<string, string> = {
+    'first-round': '首轮结果',
+    ledger: '最终竞标台账',
+    bids: '加码流水',
+    control: '确认与控制记录',
+  };
+
+  const logExport = (req: FastifyRequest, eventId: string, format: string, provisional: boolean) =>
+    ctx.db.query(
+      `INSERT INTO audit_logs (event_id, action, actor_type, actor_id, actor_name, details) VALUES ($1, 'EXPORT', 'ADMIN', $2, $3, $4)`,
+      [eventId, req.session!.adminId, req.session!.adminName, JSON.stringify({ format, provisional })],
+    );
+
+  api.get<{ Params: P }>('/admin/events/:eventId/exports/ledger.xlsx', auth, async (req, reply) => {
+    const data = await withSnapshot(ctx.db, (tx) => collectExport(tx, req.params.eventId));
+    await logExport(req, req.params.eventId, 'xlsx', data.provisional);
+    const name = `${data.title}-竞标台账${data.provisional ? '（过程数据）' : ''}.xlsx`;
+    return reply
+      .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      .header('Content-Disposition', attachment(`ledger${data.provisional ? '-provisional' : ''}.xlsx`, name))
+      .send(await toXlsx(data));
+  });
+
+  api.get<{ Params: P & { sheet: string } }>('/admin/events/:eventId/exports/:sheet.csv', auth, async (req, reply) => {
+    const sheetName = CSV_SHEETS[req.params.sheet];
+    if (!sheetName) throw bizError('NOT_FOUND', '导出表不存在');
+    const data = await withSnapshot(ctx.db, (tx) => collectExport(tx, req.params.eventId));
+    await logExport(req, req.params.eventId, `csv:${req.params.sheet}`, data.provisional);
+    const name = `${data.title}-${sheetName}${data.provisional ? '（过程数据）' : ''}.csv`;
+    return reply
+      .header('Content-Type', 'text/csv; charset=utf-8')
+      .header('Content-Disposition', attachment(`${req.params.sheet}${data.provisional ? '-provisional' : ''}.csv`, name))
+      .send(toCsv(data, sheetName));
+  });
+
+  /** 手动生成检查点（需配置 BACKUP_DIR） */
+  api.post<{ Params: P }>('/admin/events/:eventId/checkpoint', auth, async (req) => {
+    if (!ctx.config.backupDir || !ctx.onCheckpoint) throw bizError('INVALID_STATE', '服务器未配置 BACKUP_DIR，无法自动备份，请按部署说明手动执行备份脚本');
+    ctx.onCheckpoint(req.params.eventId, '手动检查点');
+    return { started: true, backupDir: ctx.config.backupDir };
+  });
+
+  api.get('/admin/maintenance', auth, async () => {
+    const r = await ctx.db.query('SELECT * FROM maintenance_log ORDER BY id DESC LIMIT 50');
+    return {
+      backupEnabled: !!ctx.config.backupDir,
+      readOnly: ctx.config.readOnly,
+      logs: r.rows.map((m) => ({ id: Number(m.id), action: m.action, details: m.details, createdAt: toIso(m.created_at) })),
     };
   });
 

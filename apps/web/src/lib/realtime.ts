@@ -50,6 +50,11 @@ export function useRealtime<T extends { seq: number }>(
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     let loading: Promise<void> | null = null;
     let pendingReload = false;
+    // SSE 是否处于正常推送状态
+    let esLive = false;
+    let everLive = false;
+    // 快照拉取失败后的重试
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
     const loadSnapshot = async (): Promise<void> => {
       if (loading) {
@@ -67,8 +72,17 @@ export function useRealtime<T extends { seq: number }>(
           }
           setError(null);
           setLastSyncAt(Date.now());
+          setConn(esLive ? 'live' : pollTimer ? 'polling' : everLive ? 'reconnecting' : 'connecting');
         } catch (e) {
           if (disposed) return;
+          // 拉取失败：即使推送通道仍在，也无法确认最新数据——明确显示断线，保留最后一次已确认数据，并定时重试
+          setConn('offline');
+          if (!retryTimer) {
+            retryTimer = setTimeout(() => {
+              retryTimer = null;
+              void loadSnapshot();
+            }, 2000);
+          }
           if (e instanceof ApiError && (e.status === 401 || e.status === 403 || e.status === 404)) setError(e);
           throw e;
         } finally {
@@ -87,6 +101,7 @@ export function useRealtime<T extends { seq: number }>(
       if (hbTimer) clearTimeout(hbTimer);
       hbTimer = setTimeout(() => {
         // 超过 30 秒无心跳：判定断线并重连
+        esLive = false;
         setConn('offline');
         reconnect();
       }, HEARTBEAT_TIMEOUT_MS);
@@ -108,6 +123,8 @@ export function useRealtime<T extends { seq: number }>(
       const sep = streamUrl.includes('?') ? '&' : '?';
       es = new EventSource(`${streamUrl}${sep}since=${seqRef.current}`, { withCredentials: true });
       es.addEventListener('hello', () => {
+        esLive = true;
+        everLive = true;
         failures = 0;
         stopPolling();
         setConn('live');
@@ -139,6 +156,7 @@ export function useRealtime<T extends { seq: number }>(
         // 由我们控制退避，不使用浏览器默认的无限重试
         es?.close();
         es = null;
+        esLive = false;
         failures++;
         if (failures >= 3) startPolling();
         else setConn('reconnecting');
@@ -173,6 +191,7 @@ export function useRealtime<T extends { seq: number }>(
       es?.close();
       if (hbTimer) clearTimeout(hbTimer);
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (retryTimer) clearTimeout(retryTimer);
       stopPolling();
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('online', onVisible);

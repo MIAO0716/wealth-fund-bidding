@@ -8,7 +8,8 @@
     "build": "node scripts/build.mjs",
     "start": "node --env-file-if-exists=../../.env dist/main.js",
     "db:migrate": "tsx --env-file-if-exists=../../.env src/cli/migrate.ts",
-    "admin:create": "tsx --env-file-if-exists=../../.env src/cli/admin-create.ts"
+    "admin:create": "tsx --env-file-if-exists=../../.env src/cli/admin-create.ts",
+    "templates": "tsx src/cli/templates.ts"
   },
   "dependencies": {
     "@bidding/shared": "0.1.0",

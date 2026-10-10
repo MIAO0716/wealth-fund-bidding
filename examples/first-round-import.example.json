@@ -1,0 +1,14 @@
+{
+  "_说明": "仅接口示例，非正式数据。100 万元、30% 只用于解释字段，正式导入请使用空白模板或实际数据。",
+  "mode": "upsert",
+  "rows": [
+    {
+      "projectCode": "wealth",
+      "unitCode": "PD",
+      "unitName": "浦东",
+      "baseTargetWan": "100.00",
+      "firstRoundIncreasePp": 30,
+      "remark": "仅接口示例，非正式数据"
+    }
+  ]
+}
