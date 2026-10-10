@@ -61,12 +61,26 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
     });
 
   const openGroup = (groupNo: number, closed: boolean) => {
+    // 首轮已发布、尚未开始：一步完成「开始竞标 + 开放本组」
+    if (p.status === 'ROUND1_PUBLISHED') return safe(() => control('START', { groupNo }))();
     if (!closed) return safe(() => control('OPEN_GROUP', { groupNo }))();
     setReasonFor({ title: `重新开放第${groupNo}组（原增幅不会下调）`, run: (reason) => control('OPEN_GROUP', { groupNo, reason }) });
   };
 
   const openGroupNo = p.groups.find((g) => g.status === 'OPEN')?.groupNo;
   const isCurrent = state.event.currentProject === project;
+  const canOpenGroups = ['ROUND1_PUBLISHED', 'LIVE', 'PAUSED'].includes(p.status) && !openGroupNo;
+  const nextWaiting = p.groups.find((g) => g.status === 'WAITING');
+
+  /** 当前该做什么：给工作人员的明确提示 */
+  const nextStep = (() => {
+    if (p.status === 'DRAFT') return '下一步：到「首轮数据」发布首轮。';
+    if (p.status === 'ROUND1_PUBLISHED') return '下一步：点下方第一组的「开放本组」，系统会自动开始竞标并开放该组（也可以先点「开始竞标」）。';
+    if (p.status === 'LIVE' && openGroupNo) return `第${openGroupNo}组竞标中：本组领导可加码，不在线的单位可在下方榜单「代录」。结束后点「结束本组」。`;
+    if (p.status === 'LIVE') return nextWaiting ? `下一步：开放第${nextWaiting.groupNo}组。` : '三组均已结束。';
+    if (p.status === 'PAUSED') return nextWaiting ? `已暂停：点「恢复」继续，或直接开放第${nextWaiting.groupNo}组。` : '三组均已结束并自动暂停：核对无误后点「锁定项目」。';
+    return `已于 ${fmtTime(p.lockedAt, true)} 锁定，结果不可修改。`;
+  })();
 
   return (
     <>
@@ -104,11 +118,9 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
               锁定项目…
             </button>
           </div>
-          <p className="small muted">
-            {p.status === 'DRAFT' && '请先在「首轮数据」发布首轮。'}
-            {p.status === 'LIVE' && '锁定前请先暂停，核对后再锁定。'}
-            {p.status === 'LOCKED' && `已于 ${fmtTime(p.lockedAt, true)} 锁定，结果不可修改。`}
-          </p>
+          <div className="notice info" style={{ marginTop: 12 }}>
+            {nextStep}
+          </div>
         </div>
         <div className="a-card">
           <h3>大屏展示</h3>
@@ -154,7 +166,16 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
                 ) : (
                   <button
                     className="btn btn-sm btn-primary"
-                    disabled={busy || !!openGroupNo || !(p.status === 'LIVE' || p.status === 'PAUSED')}
+                    disabled={busy || !canOpenGroups}
+                    title={
+                      openGroupNo
+                        ? `第${openGroupNo}组仍在进行，请先结束该组`
+                        : p.status === 'DRAFT'
+                          ? '请先发布首轮'
+                          : p.status === 'LOCKED'
+                            ? '项目已锁定'
+                            : ''
+                    }
                     onClick={() => openGroup(g.groupNo, g.status === 'CLOSED')}
                   >
                     {g.status === 'CLOSED' ? '重新开放…' : '开放本组'}
@@ -168,6 +189,9 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
 
       <div className="a-card">
         <h3>实时榜单（管理视图，含金额与底标确认）</h3>
+        <p className="small muted" style={{ marginTop: -6 }}>
+          「代记」替领导确认认领底标，首轮发布后随时可用；「代录」替领导加码，只能在该单位所在组「进行中」时使用。两者都须填写原因。
+        </p>
         {boards.length === 0 ? (
           <p className="muted">首轮发布后显示</p>
         ) : (
@@ -221,7 +245,20 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
                                     代记
                                   </button>
                                 )}
-                                <button className="btn btn-sm" onClick={() => setProxyBid(r)} disabled={p.status !== 'LIVE' || g.status !== 'OPEN'}>
+                                <button
+                                  className="btn btn-sm"
+                                  onClick={() => setProxyBid(r)}
+                                  disabled={p.status !== 'LIVE' || g.status !== 'OPEN'}
+                                  title={
+                                    p.status === 'PAUSED'
+                                      ? '竞标已暂停，恢复后可代录'
+                                      : g.status !== 'OPEN'
+                                        ? `${g.name}开放后可代录`
+                                        : !a?.acknowledged
+                                          ? '请先「代记」底标确认'
+                                          : ''
+                                  }
+                                >
                                   代录
                                 </button>
                               </div>

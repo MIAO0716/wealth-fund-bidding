@@ -81,8 +81,14 @@ textarea {
 .btn:active:not(:disabled) {
   transform: scale(0.98);
 }
-.btn:disabled {
-  opacity: 0.45;
+.btn:disabled,
+.btn-primary:disabled,
+.btn-gold:disabled,
+.btn-danger-outline:disabled {
+  background: #f1eeec;
+  border-color: #e6e1de;
+  color: #b0a6a7;
+  box-shadow: none;
   cursor: not-allowed;
 }
 .btn-primary {

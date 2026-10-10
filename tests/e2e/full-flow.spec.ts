@@ -128,10 +128,13 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
 
   // ---------------------------------------------------------- 开始竞标并开放第一组
   await admin.goto(`/admin/events/${eventId}/control`);
-  await admin.getByRole('button', { name: '开始竞标' }).click();
-  await expect(admin.locator('.chip', { hasText: '竞标中' })).toBeVisible();
+  // 首轮已发布、未开始：提示下一步，并可直接「开放本组」（自动开始竞标）
+  await expect(admin.getByText('下一步：点下方第一组的「开放本组」')).toBeVisible();
+  await expect(admin.getByRole('button', { name: '代录' }).first()).toBeDisabled();
   await admin.getByRole('button', { name: '开放本组' }).first().click();
+  await expect(admin.locator('.chip', { hasText: '竞标中' })).toBeVisible();
   await expect(admin.locator('.board-group.open').first()).toBeVisible();
+  await expect(admin.getByText('第1组竞标中')).toBeVisible();
 
   // 大屏自动切到实时榜
   await expect(screen.locator('.s-group.open')).toHaveCount(1);
