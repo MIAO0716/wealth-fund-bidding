@@ -63,7 +63,7 @@ jobs:
 
           本版本已在 GitHub Windows 构建机上通过启动、扫码、加码、锁定、导出、停止、重启、备份、恢复、重置密码的自动验证。
           "@
-          gh release create $tag dist-package/BiddingSystem-windows-x64.zip --title "Windows 一键部署包 $tag" --notes $notes --target '${{ github.sha }}'
+          gh release create $tag dist-package/BiddingSystem-windows-x64.zip --title "Windows 一键部署包 $tag" --notes $notes --target '${{ github.sha }}' --latest
 
       - name: 失败时上传日志
         if: failure()

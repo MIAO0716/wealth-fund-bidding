@@ -1,13 +1,16 @@
 # 理财、基金现场竞标系统
 
-> **直接使用**（两个版本相互独立，任选其一）：
+> ## ⬇️ 下载最新版（Windows 一键包）
 >
-> | 版本 | 适用 | 下载（[Releases](../../releases)） | 说明 |
-> | --- | --- | --- | --- |
-> | 局域网版 | 会场一台 Windows 电脑，领导连会场 Wi-Fi | `BiddingSystem-windows-x64.zip`，解压后双击「1-启动系统」 | [一键部署](docs/本机体验.md) |
-> | 互联网版 | 云服务器 + 域名，领导用手机流量即可 | `BiddingSystem-linux-x64.tar.gz`，`sudo ./install.sh --domain 域名` | [云服务器部署](docs/云服务器部署.md) |
+> **[BiddingSystem-windows-x64.zip](https://github.com/MIAO0716/wealth-fund-bidding/releases/latest/download/BiddingSystem-windows-x64.zip)**（约 90 MB，链接固定，始终是最新版）
 >
-> **金山文档填报**（可与局域网版组合）：领导在微信里打开金山文档填写，会场电脑定时读取并按同一套规则处理，无需服务器与域名。见 [金山文档接入说明](docs/金山文档接入说明.md)，可先用内置的「模拟金山文档」演练。
+> 在 Windows 电脑上解压 → 双击「1-启动系统」→ 首次设置管理员密码 → 自动打开管理端。升级时直接解压新版、再双击「1-启动系统」，数据不会丢。详见[一键部署](docs/本机体验.md)。
+>
+> ⚠️ 不要用页面上的「Code → Download ZIP」：那是源代码，解压后不能直接运行。
+>
+> 领导在金山文档（微信）中填写：程序内「金山文档」页面，见[金山文档接入说明](docs/金山文档接入说明.md)，可先用内置的「模拟金山文档」演练。
+>
+> 互联网版（云服务器，暂不需要）：[Releases](../../releases) 中以 `cloud-` 开头的 `BiddingSystem-linux-x64.tar.gz`，见[云服务器部署](docs/云服务器部署.md)。
 
 上海市分公司 16 家区分公司理财、基金两个项目的现场竞标系统：领导手机 H5 竞标端 + 电脑实时大屏 + 工作人员管理端。
 
