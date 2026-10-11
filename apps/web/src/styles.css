@@ -1399,81 +1399,112 @@ textarea {
   font-size: 14px;
 }
 
-/* 实时大屏：当前开放组放大，其余两组紧凑显示 */
+/* 实时大屏：当前开放组放大，其余两组收成紧凑小卡片 */
 .s-groups {
   transition: grid-template-columns 0.4s ease;
 }
+.s-groups.focus {
+  gap: 22px;
+}
+.s-groups.focus .s-group.open {
+  box-shadow: 0 0 0 1px rgba(226, 184, 92, 0.35), 0 0 70px rgba(226, 184, 92, 0.3);
+}
+.s-groups.focus .s-group.open .s-group-head {
+  padding: 16px 32px 12px;
+}
 .s-groups.focus .s-group.open .s-group-name {
-  font-size: 40px;
+  font-size: 44px;
+  letter-spacing: 8px;
+}
+.s-groups.focus .s-group.open .s-group-state {
+  font-size: 22px;
+  padding: 6px 18px;
 }
 .s-groups.focus .s-group.open .s-group-meta {
-  font-size: 24px;
+  font-size: 26px;
 }
 .s-groups.focus .s-group.open .s-cols,
 .s-groups.focus .s-group.open .s-row {
-  grid-template-columns: 84px 1fr 150px 240px;
+  grid-template-columns: 110px 1fr 200px 330px;
 }
 .s-groups.focus .s-group.open .s-cols {
   font-size: 20px;
+  padding: 8px 44px 2px;
+}
+.s-groups.focus .s-group.open .s-row {
+  padding: 0 32px;
+  min-height: 0;
 }
 .s-groups.focus .s-group.open .s-rank {
-  font-size: 40px;
+  font-size: 44px;
 }
 .s-groups.focus .s-group.open .s-unit {
-  font-size: 42px;
-  letter-spacing: 6px;
+  font-size: 52px;
+  line-height: 1.1;
+  letter-spacing: 10px;
+  gap: 18px;
 }
 .s-groups.focus .s-group.open .s-badge {
-  font-size: 18px;
-  padding: 4px 12px;
+  font-size: 22px;
+  padding: 5px 14px;
+  letter-spacing: 2px;
 }
 .s-groups.focus .s-group.open .s-first {
-  font-size: 32px;
+  font-size: 38px;
 }
 .s-groups.focus .s-group.open .s-current {
-  font-size: 76px;
+  font-size: 84px;
+  line-height: 1;
+}
+
+/* 非开放组：只留排名、单位、当前增幅，卡片高度随内容收缩 */
+.s-groups.focus .s-group.dim {
+  opacity: 0.5;
+  align-self: start;
+  border-radius: 16px;
 }
 .s-groups.focus .s-group.dim .s-group-head {
-  padding: 14px 16px 10px;
+  padding: 12px 14px 8px;
 }
 .s-groups.focus .s-group.dim .s-group-name {
-  font-size: 26px;
+  font-size: 22px;
   letter-spacing: 2px;
 }
 .s-groups.focus .s-group.dim .s-group-state {
-  font-size: 14px;
+  font-size: 13px;
+  padding: 2px 8px;
 }
 .s-groups.focus .s-group.dim .s-group-meta {
-  font-size: 15px;
+  margin-top: 4px;
+  font-size: 13px;
   flex-direction: column;
   gap: 2px;
 }
+.s-groups.focus .s-group.dim .s-leader.none,
 .s-groups.focus .s-group.dim .s-cols,
-.s-groups.focus .s-group.dim .s-row {
-  grid-template-columns: 40px 1fr 64px 96px;
-  padding-left: 10px;
-  padding-right: 10px;
+.s-groups.focus .s-group.dim .s-first,
+.s-groups.focus .s-group.dim .s-badge {
+  display: none;
 }
-.s-groups.focus .s-group.dim .s-cols {
-  font-size: 13px;
+.s-groups.focus .s-group.dim .s-rows {
+  flex: none;
+  padding: 4px 6px 8px;
+}
+.s-groups.focus .s-group.dim .s-row {
+  flex: none;
+  height: 46px;
+  grid-template-columns: 30px 1fr auto;
+  padding: 0 8px;
 }
 .s-groups.focus .s-group.dim .s-rank {
-  font-size: 22px;
+  font-size: 16px;
 }
 .s-groups.focus .s-group.dim .s-unit {
-  font-size: 24px;
-  letter-spacing: 1px;
-  gap: 6px;
-}
-.s-groups.focus .s-group.dim .s-badge {
-  font-size: 11px;
-  padding: 2px 6px;
-}
-.s-groups.focus .s-group.dim .s-first {
   font-size: 18px;
+  letter-spacing: 1px;
 }
 .s-groups.focus .s-group.dim .s-current {
-  font-size: 34px;
+  font-size: 22px;
 }
 
 /* ---------------------------------------------------------------- 模拟金山文档（演练用） */

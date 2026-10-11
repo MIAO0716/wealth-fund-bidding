@@ -272,8 +272,8 @@ function LiveScreen({ eventId, project }: { eventId: string; project: ProjectCod
       ) : (
         <div
           className={`s-groups ${openGroup ? 'focus' : ''}`}
-          // 当前开放组放大：约占一半宽度，其余两组缩窄并降低亮度
-          style={openGroup ? { gridTemplateColumns: data.groups.map((g) => (g.status === 'OPEN' ? '1.75fr' : '1fr')).join(' ') } : undefined}
+          // 当前开放组放大：约占三分之二宽度，其余两组收窄成紧凑小卡片并降低亮度
+          style={openGroup ? { gridTemplateColumns: data.groups.map((g) => (g.status === 'OPEN' ? '3.6fr' : '1fr')).join(' ') } : undefined}
         >
           {data.groups.map((g) => (
             <LiveGroup key={g.groupNo} g={g} flash={flash} anyOpen={!!openGroup} />
