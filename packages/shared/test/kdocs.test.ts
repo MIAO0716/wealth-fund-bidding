@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isConfirmCell, kdocsReadRange, parseTargetCell } from '../src/kdocs';
+import { kdocsReadRange, parseTargetCell } from '../src/kdocs';
 
 describe('金山文档单元格解析', () => {
   it('「加到」：数字、文本、百分号、全角、百分比格式均可识别', () => {
@@ -20,13 +20,8 @@ describe('金山文档单元格解析', () => {
     expect(parseTargetCell(5000)).toMatchObject({ ok: false });
   });
 
-  it('「确认」：确认 / 是 / √ / 复选框', () => {
-    for (const v of ['确认', ' 是 ', '√', '✓', true, 'TRUE']) expect(isConfirmCell(v)).toBe(true);
-    for (const v of ['', null, '否', false, 1, '确定吗']) expect(isConfirmCell(v)).toBe(false);
-  });
-
-  it('读取区域覆盖底标确认与全部报价行', () => {
-    expect(kdocsReadRange(40)).toBe('B11:C52');
+  it('只读取「我要加到」一个格子', () => {
+    expect(kdocsReadRange()).toBe('B6');
   });
 });
 

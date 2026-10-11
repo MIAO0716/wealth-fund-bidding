@@ -1571,33 +1571,28 @@ textarea {
   background: #fff;
   font-size: 14px;
   width: 100%;
-  min-width: 560px;
+  max-width: 560px;
   table-layout: fixed;
+}
+.mk-grid tbody td:not(.mk-rh) {
+  white-space: normal;
 }
 .mk-grid th,
 .mk-grid td {
   border: 1px solid #e5e6eb;
-  padding: 4px 6px;
+  padding: 4px 8px;
   height: 30px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .mk-grid th {
   background: #f2f3f5;
   color: #646a73;
   font-weight: 500;
 }
-.mk-grid th:nth-child(2) {
-  width: 22%;
-}
-.mk-grid th:nth-child(3) {
-  width: 15%;
-}
-.mk-grid th:nth-child(4) {
-  width: 11%;
-}
-.mk-grid th:nth-child(5) {
-  width: 38%;
+.mk-grid col.mk-rh {
+  width: 34px;
 }
 .mk-rh {
   width: 34px;
@@ -1606,33 +1601,34 @@ textarea {
   text-align: center;
   font-size: 12px;
 }
-.mk-head td:not(.mk-rh) {
-  background: var(--red);
-  color: #fff;
-  font-weight: 600;
-}
-.mk-ack td:not(.mk-rh) {
-  background: #fff8ee;
-}
 .mk-edit {
   background: #fff7d6;
   padding: 0 !important;
 }
-.mk-edit input,
-.mk-edit select {
+.mk-input {
+  outline: 2px solid var(--red);
+  outline-offset: -2px;
+}
+.mk-edit input {
   width: 100%;
-  height: 30px;
+  height: 100%;
+  min-height: 30px;
   border: none;
   background: transparent;
   font: inherit;
   padding: 0 6px;
 }
+.mk-edit input::placeholder {
+  color: #c9a96a;
+  font-size: 14px;
+  font-weight: 400;
+}
 .mk-ro.ok {
-  color: var(--ok);
+  color: var(--ok) !important;
   white-space: normal;
 }
 .mk-ro.bad {
-  color: var(--red);
+  color: var(--red) !important;
   white-space: normal;
 }
 .mk-foot {

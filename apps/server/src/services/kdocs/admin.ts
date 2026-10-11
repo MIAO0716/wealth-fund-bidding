@@ -2,15 +2,17 @@
  * 金山文档接入的管理操作：保存配置、测试连接、初始化表格版式、改用模拟金山文档、查看处理记录。
  */
 
-import { KDOCS_LAYOUT, type KdocsWrite, UNITS, bidRowRange, parseUnitFiles } from '@bidding/shared';
+import { GROUP_BY_NO, KDOCS_LAYOUT, type KdocsFormat, type KdocsWrite, UNITS, parseUnitFiles } from '@bidding/shared';
 import { withTx } from '../../db/pool';
 import { bizError } from '../../lib/errors';
 import { toIso } from '../../lib/time';
 import { type Actor, audit } from '../core';
 import type { AppContext } from '../context';
-import { getEventRow } from '../events';
+import { qrDataUrl, wifiInfo } from '../auth';
+import { getEventRow, readConfig } from '../events';
 import { KdocsError, callScript, isMockUrl, normalizeWebhookUrl } from './client';
 import type { KdocsMock } from './mock';
+import { KDOCS_COLORS } from './template';
 import type { KdocsBindingRow, KdocsSyncManager } from './sync';
 
 export interface KdocsDeps {
@@ -29,7 +31,6 @@ export function bindingView(b: KdocsBindingRow | null) {
     webhookUrl: b.webhook_url,
     tokenMasked: maskToken(b.token),
     intervalSec: b.interval_sec,
-    maxRows: b.max_rows,
     enabled: b.enabled,
     baselineDone: b.baseline_done,
     enabledAt: toIso(b.enabled_at),
@@ -83,7 +84,7 @@ export async function saveKdocsBinding(
   d: KdocsDeps,
   eventId: string,
   actor: Actor,
-  body: { webhookUrl?: unknown; token?: unknown; intervalSec?: unknown; maxRows?: unknown; enabled?: unknown; unitFiles?: unknown; autoSync?: unknown },
+  body: { webhookUrl?: unknown; token?: unknown; intervalSec?: unknown; enabled?: unknown; unitFiles?: unknown; autoSync?: unknown },
 ) {
   if (d.ctx.config.readOnly) throw bizError('READ_ONLY');
   await getEventRow(d.ctx.db, eventId);
@@ -103,8 +104,8 @@ export async function saveKdocsBinding(
   if (token.length > 500) throw bizError('BAD_REQUEST', '脚本令牌过长');
   const intervalSec = body.intervalSec === undefined ? (existing?.interval_sec ?? 3) : Number(body.intervalSec);
   if (!Number.isInteger(intervalSec) || intervalSec < 1 || intervalSec > 60) throw bizError('BAD_REQUEST', '同步间隔须为 1–60 秒');
-  const maxRows = body.maxRows === undefined ? (existing?.max_rows ?? KDOCS_LAYOUT.defaultBidRows) : Number(body.maxRows);
-  if (!Number.isInteger(maxRows) || maxRows < 5 || maxRows > 200) throw bizError('BAD_REQUEST', '报价行数须为 5–200');
+  // max_rows 为旧版式（多行报价表）遗留字段，极简版式不再使用
+  const maxRows = existing?.max_rows ?? 40;
   const enabled = body.enabled === undefined ? (existing?.enabled ?? false) : body.enabled === true;
   const autoSync = body.autoSync === undefined ? (existing?.auto_sync ?? false) : body.autoSync === true;
   // 每家单位一个文件：解析「单位 链接」清单；传空字符串或 null 表示一个文件 16 张工作表
@@ -158,11 +159,6 @@ export async function saveKdocsBinding(
       await d.sync.refresh(o.event_id);
     }
   }
-  if (d.mock && isMockUrl(webhookUrl)) {
-    const fileId = /\/file\/([^/]+)\//.exec(webhookUrl)?.[1];
-    const wb = fileId ? d.mock.file(fileId) : undefined;
-    if (wb) wb.maxRows = maxRows;
-  }
   await d.sync.refresh(eventId);
   return { ...(await getKdocsOverview(d, eventId)), stoppedEvents };
 }
@@ -207,20 +203,20 @@ export async function connectKdocs(
   const enable = body.enable !== false;
   const existing = await d.sync.binding(eventId);
 
-  let source: { webhookUrl?: unknown; token?: unknown; intervalSec?: number; maxRows?: number; unitFiles?: unknown } = {
+  let source: { webhookUrl?: unknown; token?: unknown; intervalSec?: number; unitFiles?: unknown } = {
     webhookUrl: body.webhookUrl,
     token: body.token,
     unitFiles: body.unitFiles,
   };
   if (body.reuse === true) {
     const r = await d.ctx.db.query(
-      `SELECT webhook_url, token, interval_sec, max_rows, unit_files FROM kdocs_bindings
+      `SELECT webhook_url, token, interval_sec, unit_files FROM kdocs_bindings
         WHERE event_id <> $1 AND webhook_url NOT LIKE '%/mock-kdocs/%' ORDER BY updated_at DESC LIMIT 1`,
       [eventId],
     );
     if (!r.rowCount) throw bizError('BAD_REQUEST', '没有可以沿用的金山表格，请粘贴 webhook 链接和脚本令牌');
     const row = r.rows[0];
-    source = { webhookUrl: row.webhook_url, token: row.token, intervalSec: row.interval_sec, maxRows: row.max_rows, unitFiles: row.unit_files ?? null };
+    source = { webhookUrl: row.webhook_url, token: row.token, intervalSec: row.interval_sec, unitFiles: row.unit_files ?? null };
   }
   const webhookGiven = typeof source.webhookUrl === 'string' && source.webhookUrl.trim() !== '';
   const keepRunning = !!existing?.enabled && (!webhookGiven || existing.webhook_url === String(source.webhookUrl).trim());
@@ -232,7 +228,6 @@ export async function connectKdocs(
       token: source.token,
       ...(source.unitFiles !== undefined ? { unitFiles: source.unitFiles } : {}),
       ...(source.intervalSec ? { intervalSec: source.intervalSec } : {}),
-      ...(source.maxRows ? { maxRows: source.maxRows } : {}),
       enabled: keepRunning,
     });
     steps.push({ name: '保存链接与令牌', ok: true, detail: body.reuse === true ? '已沿用上次的金山表格' : '已保存' });
@@ -264,7 +259,8 @@ export async function connectKdocs(
   // 3. 写入版式（不改动领导已填写的内容）
   try {
     const r = (await initKdocsLayout(d, eventId, actor, { clearInputs: false }))!;
-    steps.push({ name: '写入表格版式', ok: true, detail: `已写入标题、标签、表头与序号（${r.written} 处）` });
+    const fmt = r.formatErrors.length ? `；部分格式金山不支持，已忽略（${r.formatErrors.length} 项，不影响使用）` : '';
+    steps.push({ name: '写入表格版式', ok: true, detail: `已写入标题、标签与格式（${r.written} 处内容、${r.formatted} 处格式${fmt}）` });
   } catch (e) {
     steps.push({ name: '写入表格版式', ok: false, detail: (e as Error).message });
     return { ok: false, steps, overview: await getKdocsOverview(d, eventId) };
@@ -291,6 +287,8 @@ async function requireBinding(d: KdocsDeps, eventId: string): Promise<KdocsBindi
   return b;
 }
 
+const OLD_SCRIPT = '金山表格里的同步脚本版本过旧（需要 1.3.0 及以上）：请在管理端「金山文档」下载最新脚本，在总控文件的脚本编辑器中全选替换并保存，再点「一键连接」';
+
 function kdocsBizError(e: unknown): never {
   if (e instanceof KdocsError) throw bizError('BAD_REQUEST', e.message);
   throw e;
@@ -306,6 +304,7 @@ export async function testKdocs(d: KdocsDeps, eventId: string) {
   try {
     if (!b.unit_files) {
       const r = await callScript(b.webhook_url, b.token, { action: 'ping' }, d.sync.callOpts);
+      if (r.supportsExpect !== true) throw new KdocsError(OLD_SCRIPT, 'PROTOCOL');
       const sheets = r.sheets ?? [];
       return {
         ok: true,
@@ -317,7 +316,7 @@ export async function testKdocs(d: KdocsDeps, eventId: string) {
     }
     const reads = UNITS.map((u) => ({ file: b.unit_files![u.code], sheet: u.name, range: 'A1' }));
     const r = await callScript(b.webhook_url, b.token, { action: 'batch', reads }, d.sync.callOpts);
-    if (r.supportsFiles !== true) throw new KdocsError('脚本版本过旧，不支持「每家单位一个文件」：请从管理端重新下载脚本，在总控文件中整体替换', 'PROTOCOL');
+    if (r.supportsExpect !== true) throw new KdocsError(OLD_SCRIPT, 'PROTOCOL');
     const bad = (r.reads ?? []).filter((x) => x.values === null);
     return {
       ok: true,
@@ -331,28 +330,64 @@ export async function testKdocs(d: KdocsDeps, eventId: string) {
   }
 }
 
-/** 版式写入指令：标题、信息区标签、表头、序号；clearInputs 时同时清空领导填写区与处理结果 */
-export function layoutWrites(maxRows: number, clearInputs: boolean, title: string, unitFiles: Record<string, string> | null = null): KdocsWrite[] {
-  const { first, last } = bidRowRange(maxRows);
+/**
+ * 版式写入指令：标题、标签、说明；clearInputs 时同时清空「我要加到」、处理结果与信息区。
+ * 同时清空旧版式（多行报价表）的残留内容。
+ */
+export function layoutWrites(clearInputs: boolean, title: string, unitFiles: Record<string, string> | null = null): KdocsWrite[] {
+  const L = KDOCS_LAYOUT;
   const out: KdocsWrite[] = [];
   for (const u of UNITS) {
     const s = u.name;
     const file = unitFiles?.[u.code];
     const start = out.length;
-    out.push({ sheet: s, range: KDOCS_LAYOUT.titleCell, values: [[`${u.name} · ${title}`]] });
-    out.push({ sheet: s, range: `A2:A${1 + KDOCS_LAYOUT.infoLabels.length}`, values: KDOCS_LAYOUT.infoLabels.map((l) => [l]) });
-    out.push({ sheet: s, range: KDOCS_LAYOUT.syncLabelCell, values: [['最近同步']] });
-    out.push({ sheet: s, range: `A${KDOCS_LAYOUT.ackRow}`, values: [[KDOCS_LAYOUT.ackLabel]] });
-    out.push({ sheet: s, range: `A${KDOCS_LAYOUT.headerRow}:E${KDOCS_LAYOUT.headerRow}`, values: [[...KDOCS_LAYOUT.headers]] });
-    out.push({ sheet: s, range: `A${first}:A${last}`, values: Array.from({ length: maxRows }, (_, i) => [i + 1]) });
+    out.push({ sheet: s, range: 'A1:B1', values: [[u.name, `${GROUP_BY_NO.get(u.groupNo)!.name} · ${title}`]] });
+    out.push({ sheet: s, range: `A2:A${L.lastRow}`, values: L.labels.map((l) => [l]) });
+    out.push({ sheet: s, range: L.noteCell, values: [[L.note]] });
+    for (const r of L.legacyRanges) out.push({ sheet: s, range: r, values: blankGrid(r) });
     if (clearInputs) {
-      out.push({ sheet: s, range: `B${KDOCS_LAYOUT.ackRow}:C${KDOCS_LAYOUT.ackRow}`, values: [['', '']] });
-      out.push({ sheet: s, range: `B${first}:E${last}`, values: Array.from({ length: maxRows }, () => ['', '', '', '']) });
-      out.push({ sheet: s, range: KDOCS_LAYOUT.infoValueRange, values: KDOCS_LAYOUT.infoLabels.map(() => ['']) });
+      out.push({ sheet: s, range: L.infoValueRange, values: [[''], [''], [''], ['']] });
+      out.push({ sheet: s, range: `${L.inputCell}:${L.resultCell}`, values: [[''], ['']] });
+      out.push({ sheet: s, range: L.syncCell, values: [['']] });
     }
     if (file) for (let i = start; i < out.length; i++) out[i] = { file, ...out[i] };
   }
   return out;
+}
+
+/** 版式格式：红色标题条、灰色标签列、醒目的黄色输入格；金山不支持的属性会被脚本忽略 */
+export function layoutFormats(unitFiles: Record<string, string> | null = null): KdocsFormat[] {
+  const C = KDOCS_COLORS;
+  const L = KDOCS_LAYOUT;
+  const out: KdocsFormat[] = [];
+  for (const u of UNITS) {
+    const at = unitFiles?.[u.code] ? { file: unitFiles[u.code], sheet: u.name } : { sheet: u.name };
+    const f = (range: string, x: Omit<KdocsFormat, 'sheet' | 'range' | 'file'>) => out.push({ ...at, range, ...x });
+    for (const r of L.legacyRanges) f(r, { fill: null });
+    f('A1', { colWidth: 12.5 });
+    f('B1', { colWidth: 34 });
+    f('A1:B1', { fill: C.red, fontColor: C.white, bold: true, fontSize: 18, vCenter: true, rowHeight: 36 });
+    f('B1', { fontSize: 11, bold: false, hAlign: 'right', wrap: true });
+    f(`A2:A${L.lastRow}`, { fill: C.labelFill, fontColor: C.label, fontSize: 12, vCenter: true });
+    f(`B2:B${L.lastRow}`, { fontColor: C.text, fontSize: 14, bold: true, vCenter: true, wrap: true });
+    f('A2:B5', { rowHeight: 26 });
+    f('B4', { fontColor: C.red, fontSize: 18 });
+    f('B5', { fontColor: C.gold });
+    f(`A${L.inputRow}`, { fontColor: C.red, bold: true, fontSize: 14 });
+    f(L.inputCell, { fill: C.inputFill, fontColor: C.red, fontSize: 22, bold: true, hAlign: 'center' });
+    f(`A${L.inputRow}:B${L.inputRow}`, { rowHeight: 44 });
+    f(L.resultCell, { fontSize: 13, rowHeight: 40 });
+    f(L.noteCell, { fontSize: 11, bold: false, fontColor: C.label, rowHeight: 48 });
+    f(L.syncCell, { fontSize: 11, bold: false, fontColor: C.muted });
+  }
+  return out;
+}
+
+function blankGrid(range: string): string[][] {
+  const m = /^([A-Z])(\d+):([A-Z])(\d+)$/.exec(range)!;
+  const cols = m[3].charCodeAt(0) - m[1].charCodeAt(0) + 1;
+  const rows = Number(m[4]) - Number(m[2]) + 1;
+  return Array.from({ length: rows }, () => Array.from({ length: cols }, () => ''));
 }
 
 export async function initKdocsLayout(d: KdocsDeps, eventId: string, actor: Actor, body: { clearInputs?: unknown }) {
@@ -363,12 +398,20 @@ export async function initKdocsLayout(d: KdocsDeps, eventId: string, actor: Acto
   const ev = await getEventRow(d.ctx.db, eventId);
   const title = String((ev.config as { name?: string }).name || '理财、基金现场竞标');
   try {
-    const r = await callScript(b.webhook_url, b.token, { action: 'batch', writes: layoutWrites(b.max_rows, clearInputs, title, b.unit_files) }, d.sync.callOpts);
+    const r = await callScript(
+      b.webhook_url,
+      b.token,
+      { action: 'batch', writes: layoutWrites(clearInputs, title, b.unit_files), formats: layoutFormats(b.unit_files) },
+      d.sync.callOpts,
+    );
+    if (r.supportsExpect !== true) throw new KdocsError(OLD_SCRIPT, 'PROTOCOL');
     d.sync.resetWritten(eventId);
     await withTx(d.ctx.db, (tx) => audit(tx, eventId, actor, 'KDOCS_LAYOUT', { details: { clearInputs, written: r.written ?? 0 } }));
     return {
       ok: true,
       written: r.written ?? 0,
+      formatted: r.formatted ?? 0,
+      formatErrors: r.formatErrors ?? [],
       missingUnits: UNITS.filter((u) => (r.missingSheets ?? []).includes(u.name) || (r.errors ?? []).some((x) => x.startsWith(`${u.name}：`))).map((u) => u.name),
       errors: r.errors ?? [],
     };
@@ -401,4 +444,24 @@ export async function useKdocsMock(d: KdocsDeps, eventId: string, actor: Actor, 
   await saveKdocsBinding(d, eventId, actor, { webhookUrl, token: d.mock.token, enabled: false, unitFiles });
   await initKdocsLayout(d, eventId, actor, { clearInputs: false });
   return { ...(await getKdocsOverview(d, eventId)), mockFileId: hubId };
+}
+
+/**
+ * 领导扫码填报卡：每家单位一张，二维码即本单位金山文件的链接（微信扫一扫直接打开本单位的表）。
+ * 只适用于「每家单位一个文件」；模拟金山文档时二维码指向本机的模拟填写页。
+ */
+export async function kdocsCards(d: KdocsDeps, eventId: string) {
+  const b = await requireBinding(d, eventId);
+  if (!b.unit_files) throw bizError('BAD_REQUEST', '扫码填报卡只适用于「每家单位一个文件」：一个文件 16 张工作表时，各单位扫同一个码会看到全部单位');
+  const ev = await getEventRow(d.ctx.db, eventId);
+  const cfg = readConfig(ev);
+  const cards = [];
+  for (const u of UNITS) {
+    const raw = b.unit_files[u.code];
+    if (!raw) continue;
+    const mock = /^mock:\/\/([A-Za-z0-9_-]+)$/.exec(raw);
+    const url = mock ? `${d.ctx.config.publicBaseUrl}/mock-kdocs?file=${mock[1]}` : raw;
+    cards.push({ unitCode: u.code, unitName: u.name, url, qrDataUrl: await qrDataUrl(url) });
+  }
+  return { eventName: cfg.name, wifi: await wifiInfo(cfg), isMock: isMockUrl(b.webhook_url), cards };
 }

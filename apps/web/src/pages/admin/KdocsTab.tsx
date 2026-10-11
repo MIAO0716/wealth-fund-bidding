@@ -1,6 +1,8 @@
 import { UNITS, parseUnitFiles } from '@bidding/shared';
 import { useEffect, useMemo, useState } from 'react';
 import { KdocsReadBar } from '../../components/KdocsRead';
+import { type CardInfo, KdocsCard, type KdocsCardItem, PrintKdocsCards } from '../../components/LeaderCards';
+import { Modal } from '../../components/ui';
 import { api, errorText } from '../../lib/api';
 import { fmtTime } from '../../lib/format';
 import type { TabProps } from './EventPage';
@@ -10,7 +12,6 @@ interface Overview {
     webhookUrl: string;
     tokenMasked: string;
     intervalSec: number;
-    maxRows: number;
     enabled: boolean;
     baselineDone: boolean;
     enabledAt: string | null;
@@ -78,10 +79,18 @@ const STATUS_CHIP: Record<string, [string, string]> = {
 export function KdocsTab({ eventId }: TabProps) {
   const base = `/api/v1/admin/events/${eventId}/kdocs`;
   const [ov, setOv] = useState<Overview | null>(null);
-  const [form, setForm] = useState({ webhookUrl: '', token: '', intervalSec: 3, maxRows: 40, autoSync: false });
+  const [form, setForm] = useState({ webhookUrl: '', token: '', intervalSec: 3, autoSync: false });
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [steps, setSteps] = useState<ConnectResult['steps'] | null>(null);
+  const [cards, setCards] = useState<(CardInfo & { cards: KdocsCardItem[]; isMock: boolean }) | null>(null);
+  const openCards = async () => {
+    try {
+      setCards(await api.get(`${base}/cards`));
+    } catch (e) {
+      setMsg({ ok: false, text: errorText(e) });
+    }
+  };
   const [enableAfter, setEnableAfter] = useState(true);
   const [mode, setMode] = useState<'files' | 'single'>('files');
   const [filesText, setFilesText] = useState('');
@@ -104,7 +113,7 @@ export function KdocsTab({ eventId }: TabProps) {
   useEffect(() => {
     void load().then((o) => {
       if (o && o.binding) {
-        setForm({ webhookUrl: o.binding.webhookUrl, token: '', intervalSec: o.binding.intervalSec, maxRows: o.binding.maxRows, autoSync: o.binding.autoSync });
+        setForm({ webhookUrl: o.binding.webhookUrl, token: '', intervalSec: o.binding.intervalSec, autoSync: o.binding.autoSync });
         syncFromBinding(o.binding);
       }
     });
@@ -136,7 +145,6 @@ export function KdocsTab({ eventId }: TabProps) {
           ...(form.token.trim() ? { token: form.token.trim() } : {}),
           intervalSec: Number(form.intervalSec),
           autoSync: form.autoSync,
-          maxRows: Number(form.maxRows),
           ...(enabled !== undefined ? { enabled } : {}),
         }),
       (r: { stoppedEvents?: string[] }) => {
@@ -199,7 +207,7 @@ export function KdocsTab({ eventId }: TabProps) {
         <div className="a-card">
           <h3>一键连接金山文档</h3>
           <p className="small muted" style={{ marginTop: 0 }}>
-            领导在金山文档（微信内打开）本单位的工作表里填写「加到多少」并选「确认」；工作人员看到有人填写后点「读取金山表格」，程序读取一次，按与手机端相同的规则处理，并把结果写回表格。
+            领导在金山文档（微信内打开）本单位的表格里，只在黄色的「我要加到」格子填一个数字；工作人员听到领导说填好了，点「读取金山表格」，程序读取一次，按与手机端相同的规则处理，把结果写回表格并清空黄色格子。本专场第一次填写即视为确认底标。
           </p>
           <div className="kd-mode">
             <label className={mode === 'files' ? 'on' : ''}>
@@ -322,7 +330,7 @@ export function KdocsTab({ eventId }: TabProps) {
 
           <details style={{ marginTop: 14 }}>
             <summary className="small" style={{ cursor: 'pointer' }}>
-              高级设置（同步间隔、报价行数、单独执行各步骤）
+              高级设置（同步间隔、单独执行各步骤）
             </summary>
             <div className="form-grid" style={{ marginTop: 8 }}>
               <label className="field" style={{ gridColumn: '1 / -1', flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -332,10 +340,6 @@ export function KdocsTab({ eventId }: TabProps) {
               <label className="field">
                 <span>同步间隔（秒，仅自动定时读取时使用）</span>
                 <input type="number" min={1} max={60} value={form.intervalSec} onChange={(e) => setForm({ ...form, intervalSec: Number(e.target.value) })} />
-              </label>
-              <label className="field">
-                <span>每家报价行数</span>
-                <input type="number" min={5} max={200} value={form.maxRows} onChange={(e) => setForm({ ...form, maxRows: Number(e.target.value) })} />
               </label>
             </div>
             <div className="a-row" style={{ marginTop: 10, flexWrap: 'wrap' }}>
@@ -357,8 +361,8 @@ export function KdocsTab({ eventId }: TabProps) {
               <button
                 className="btn"
                 disabled={busy || !b}
-                title="写入标题、信息区标签、表头和序号；不会改动领导已填写的内容"
-                onClick={() => void run(() => api.post(`${base}/init-layout`, { clearInputs: false }), (r) => `已写入版式（${r.written} 处）${r.missingUnits.length ? `；缺少工作表：${r.missingUnits.join('、')}` : ''}`)}
+                title="写入标题、标签、说明与格式；不会改动领导已填写的内容"
+                onClick={() => void run(() => api.post(`${base}/init-layout`, { clearInputs: false }), (r) => `已写入版式（${r.written} 处内容、${r.formatted ?? 0} 处格式）${r.missingUnits.length ? `；缺少工作表：${r.missingUnits.join('、')}` : ''}`)}
               >
                 初始化表格版式
               </button>
@@ -411,14 +415,14 @@ export function KdocsTab({ eventId }: TabProps) {
             </>
           )}
           <p className="small muted">
-            同一张表格反复测试：新建一个演示活动，沿用同一张表格；首次启用时，表格里已有的报价行会标记为「开始同步前已填写」，不参与新活动。
+            同一张表格反复测试：新建一个演示活动，沿用同一张表格；首次启用时，黄色格子里已有的数字会标记为「开始读取前已填写」并清空，不参与新活动。
             也可以先停用读取，再清空各单位的填写区。
           </p>
           <button
             className="btn btn-danger"
             disabled={busy || !b || b.enabled}
             onClick={() => {
-              if (!window.confirm('将清空 16 张单位工作表中领导填写的内容和处理结果（B11、报价行 B–E 列）。确定继续？')) return;
+              if (!window.confirm('将清空 16 家单位表格中「我要加到」与「处理结果」等内容。确定继续？')) return;
               void run(() => api.post(`${base}/init-layout`, { clearInputs: true }), () => '已清空填写区并重写版式');
             }}
           >
@@ -516,6 +520,17 @@ export function KdocsTab({ eventId }: TabProps) {
         </div>
 
         <div className="a-card">
+          <h3>领导扫码填报卡</h3>
+          <p className="small muted">
+            每家单位一张卡，二维码就是本单位金山表格的链接：领导用微信扫一扫直接打开自己的表，只需在黄色格子填一个数字。可打印（每张 A4 两张），也可以把卡片截图发给领导。
+          </p>
+          <button className="btn" disabled={!b || b.mode !== 'files'} onClick={() => void openCards()}>
+            生成扫码填报卡
+          </button>
+          {b && b.mode !== 'files' && <p className="small muted">只适用于「每家单位一个文件」（一个文件 16 张工作表时，各单位扫同一个码会看到全部单位）。</p>}
+        </div>
+
+        <div className="a-card">
           <h3>最近处理的填写</h3>
           {!ov?.rows.length ? (
             <p className="muted">暂无</p>
@@ -525,7 +540,7 @@ export function KdocsTab({ eventId }: TabProps) {
                 <tr>
                   <th>时间</th>
                   <th>单位</th>
-                  <th>行</th>
+                  <th>填写</th>
                   <th>结果</th>
                 </tr>
               </thead>
@@ -535,8 +550,8 @@ export function KdocsTab({ eventId }: TabProps) {
                     <td className="small">{fmtTime(r.seenAt)}</td>
                     <td>{r.unitName}</td>
                     <td>
-                      {r.rowNo}
-                      <span className="small muted">（{r.targetRaw || '空'}）</span>
+                      {r.targetRaw || '空'}
+                      <span className="small muted">（第 {r.rowNo} 次）</span>
                     </td>
                     <td>
                       <span className={`chip ${STATUS_CHIP[r.status][0]}`}>{STATUS_CHIP[r.status][1]}</span> <span className="small">{r.message}</span>
@@ -548,6 +563,33 @@ export function KdocsTab({ eventId }: TabProps) {
           )}
         </div>
       </div>
+      {cards && (
+        <Modal
+          wide
+          title={`领导扫码填报卡（${cards.cards.length} 家，每张 A4 打印两张）`}
+          onClose={() => setCards(null)}
+          footer={
+            <>
+              <button className="btn" onClick={() => setCards(null)}>
+                关闭
+              </button>
+              <button className="btn btn-primary" onClick={() => window.print()}>
+                打印
+              </button>
+            </>
+          }
+        >
+          <p className="small muted">
+            {cards.isMock ? '当前是模拟金山文档：二维码指向本机的模拟填写页，仅供演练。' : '二维码即各单位金山文件的分享链接，请确认每个文件只分享给对应单位领导、权限为「可编辑」。'}
+          </p>
+          <div className="card-grid">
+            {cards.cards.map((c) => (
+              <KdocsCard key={c.unitCode} c={c} card={cards} />
+            ))}
+          </div>
+          <PrintKdocsCards cards={cards.cards} card={cards} />
+        </Modal>
+      )}
     </div>
   );
 }

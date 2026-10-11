@@ -10,10 +10,28 @@
 
 import { randomBytes } from 'node:crypto';
 import vm from 'node:vm';
-import { KDOCS_LAYOUT, UNITS, bidRowRange } from '@bidding/shared';
+import { KDOCS_LAYOUT, UNITS } from '@bidding/shared';
 import { AIRSCRIPT_SOURCE } from './airscript';
 
 type Cell = string | number | boolean | null;
+
+/** 单元格格式（只记录模拟页面需要展示的部分） */
+export interface CellStyle {
+  fill?: string;
+  color?: string;
+  size?: number;
+  bold?: boolean;
+  align?: 'left' | 'center' | 'right';
+  wrap?: boolean;
+}
+
+/** 表格对象模型的 BGR 整数 → 'RRGGBB' */
+function fromBgr(n: number): string {
+  const r = n & 0xff;
+  const g = (n >> 8) & 0xff;
+  const b = (n >> 16) & 0xff;
+  return [r, g, b].map((x) => x.toString(16).padStart(2, '0')).join('').toUpperCase();
+}
 
 // ---------------------------------------------------------------- 单元格地址
 
@@ -47,7 +65,22 @@ export function parseRange(addr: string): { r1: number; c1: number; r2: number; 
 
 class MockSheet {
   readonly cells = new Map<string, Cell>();
+  readonly styles = new Map<string, CellStyle>();
+  readonly colWidths = new Map<number, number>();
+  readonly rowHeights = new Map<number, number>();
   constructor(public Name: string) {}
+
+  /** 对区域内每个格子修改格式 */
+  style(addr: string, patch: (st: CellStyle) => void): void {
+    const { r1, c1, r2, c2 } = parseRange(addr);
+    for (let r = r1; r <= r2; r++) {
+      for (let c = c1; c <= c2; c++) {
+        const st = this.styles.get(`${r},${c}`) ?? {};
+        patch(st);
+        this.styles.set(`${r},${c}`, st);
+      }
+    }
+  }
 
   get(r: number, c: number): Cell {
     return this.cells.get(`${r},${c}`) ?? null;
@@ -83,11 +116,42 @@ class MockSheet {
   /** AirScript 的 Range 对象（只实现脚本用到的部分） */
   Range(addr: string) {
     const sheet = this;
-    const single = (() => {
-      const p = parseRange(addr);
-      return p.r1 === p.r2 && p.c1 === p.c2;
-    })();
+    const p = parseRange(addr);
+    const single = p.r1 === p.r2 && p.c1 === p.c2;
+    const ALIGN: Record<number, CellStyle['align']> = { [-4108]: 'center', [-4152]: 'right', [-4131]: 'left' };
     return {
+      Interior: {
+        set Color(v: number) {
+          sheet.style(addr, (st) => (st.fill = fromBgr(v)));
+        },
+        set ColorIndex(_v: number) {
+          sheet.style(addr, (st) => delete st.fill);
+        },
+      },
+      Font: {
+        set Color(v: number) {
+          sheet.style(addr, (st) => (st.color = fromBgr(v)));
+        },
+        set Size(v: number) {
+          sheet.style(addr, (st) => (st.size = v));
+        },
+        set Bold(v: boolean) {
+          sheet.style(addr, (st) => (st.bold = v));
+        },
+      },
+      set HorizontalAlignment(v: number) {
+        sheet.style(addr, (st) => (st.align = ALIGN[v]));
+      },
+      set VerticalAlignment(_v: number) {},
+      set WrapText(v: boolean) {
+        sheet.style(addr, (st) => (st.wrap = v));
+      },
+      set ColumnWidth(v: number) {
+        for (let c = p.c1; c <= p.c2; c++) sheet.colWidths.set(c, v);
+      },
+      set RowHeight(v: number) {
+        for (let r = p.r1; r <= p.r2; r++) sheet.rowHeights.set(r, v);
+      },
       get Value2() {
         const v = sheet.read(addr);
         return single ? v[0][0] : v;
@@ -111,8 +175,6 @@ function normalizeCell(v: unknown): Cell {
 
 export class MockWorkbook {
   readonly sheets: MockSheet[] = [];
-  /** 报价行数（与管理端配置一致，决定模拟页面显示与可编辑范围） */
-  maxRows: number = KDOCS_LAYOUT.defaultBidRows;
   constructor(readonly fileId: string) {}
 
   sheet(name: string): MockSheet | undefined {
@@ -170,11 +232,11 @@ export class KdocsMock {
     return this.files.get(fileId);
   }
 
-  /** 新建模拟文件：每家单位一张空工作表 + 一张说明表（units 为空时只建说明表，作为「总控」文件） */
+  /** 新建模拟文件：每家单位一张空工作表 + 一张说明表（放最后）（units 为空时只建说明表，作为「总控」文件） */
   createFile(fileId: string, units: ReadonlyArray<{ name: string }> = UNITS): MockWorkbook {
     const wb = new MockWorkbook(fileId);
-    wb.addSheet('使用说明').write('A1', units.length ? '模拟金山文档：表格版式由管理端「初始化表格」写入' : '模拟金山文档：竞标总控（只有工作人员能打开，存放同步脚本）');
     for (const u of units) wb.addSheet(u.name);
+    wb.addSheet('使用说明').write('A1', units.length ? '模拟金山文档：表格版式由管理端「初始化表格」写入' : '模拟金山文档：竞标总控（只有工作人员能打开，存放同步脚本）');
     this.files.set(fileId, wb);
     return wb;
   }
@@ -213,31 +275,32 @@ export class KdocsMock {
     }
   }
 
-  /** 模拟领导在表格中填写：只允许领导可编辑的单元格（B11、报价行的 B/C 列） */
+  /** 模拟领导在表格中填写：只允许「我要加到」一个格子 */
   editCell(fileId: string, sheetName: string, addr: string, value: unknown): void {
     const wb = this.files.get(fileId);
     if (!wb) throw new Error('模拟文件不存在');
-    const maxRows = wb.maxRows;
     const sheet = wb.sheet(sheetName);
     if (!sheet) throw new Error('工作表不存在');
     const { r1, c1, r2, c2 } = parseRange(addr);
     if (r1 !== r2 || c1 !== c2) throw new Error('一次只能编辑一个单元格');
-    const { first, last } = bidRowRange(maxRows);
-    const editable = (r1 === KDOCS_LAYOUT.ackRow && c1 === 2) || (r1 >= first && r1 <= last && (c1 === 2 || c1 === 3));
-    if (!editable) throw new Error('该单元格受保护，领导不能编辑');
+    if (!(r1 === KDOCS_LAYOUT.inputRow && c1 === 2)) throw new Error('该单元格受保护，领导不能编辑');
     sheet.set(r1, c1, normalizeCell(typeof value === 'string' ? value.slice(0, 50) : value));
   }
 
-  /** 网页展示：每张工作表 A1:E{最后一行} */
+  /** 网页展示：每张工作表 A1:B{最后一行}，连同格式 */
   snapshot(fileId: string) {
     const wb = this.files.get(fileId);
     if (!wb) return null;
-    const maxRows = wb.maxRows;
-    const last = bidRowRange(maxRows).last;
+    const last = KDOCS_LAYOUT.lastRow;
     return {
       fileId,
-      maxRows,
-      sheets: wb.sheets.map((s) => ({ name: s.Name, cells: s.read(`A1:E${last}`) })),
+      sheets: wb.sheets.map((s) => ({
+        name: s.Name,
+        cells: s.read(`A1:B${last}`),
+        styles: Array.from({ length: last }, (_, r) => [1, 2].map((c) => s.styles.get(`${r + 1},${c}`) ?? null)),
+        colWidths: [1, 2].map((c) => s.colWidths.get(c) ?? null),
+        rowHeights: Array.from({ length: last }, (_, r) => s.rowHeights.get(r + 1) ?? null),
+      })),
     };
   }
 }

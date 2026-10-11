@@ -6,10 +6,11 @@
  *
  * 只使用 AirScript 1.0 表格 API 中最基础的部分：Application.Sheets（Count / Item）、Sheet.Name、
  * Sheet.Range(地址).Value2（读）/ .Value（写）、Context.argv，以及脚本末尾 return 返回结果。
+ * 格式（底色、字号、列宽等）用 Range.Interior / Font / ColumnWidth 等，逐项 try，金山不支持的属性忽略，不影响读写。
  * 语法保持 ES5（var / function），不依赖新语法。
  */
 
-export const AIRSCRIPT_VERSION = '1.2.0';
+export const AIRSCRIPT_VERSION = '1.3.0';
 
 export const AIRSCRIPT_SOURCE = `/**
  * 理财、基金现场竞标 · 金山文档同步脚本 v${AIRSCRIPT_VERSION}（协议 1）
@@ -26,6 +27,7 @@ var PROTOCOL = 1;
 var SCRIPT_VERSION = '${AIRSCRIPT_VERSION}';
 var MAX_WRITES = 3000;
 var MAX_READS = 64;
+var MAX_FORMATS = 3000;
 
 function listSheetNames(app) {
   var names = [];
@@ -41,6 +43,38 @@ function to2D(v) {
   if (!Array.isArray(v)) return [[v]];
   if (v.length > 0 && !Array.isArray(v[0])) return [v];
   return v;
+}
+
+function cellText(v) {
+  return v === undefined || v === null ? '' : String(v);
+}
+
+// 颜色 'RRGGBB' → 表格对象模型使用的 BGR 整数
+function bgr(hex) {
+  var n = parseInt(hex, 16);
+  return ((n & 0xff) << 16) | (n & 0xff00) | ((n >> 16) & 0xff);
+}
+
+function applyFormat(app, f, result) {
+  var rg = app.Sheets.Item(f.sheet).Range(f.range);
+  function set(what, fn) {
+    try {
+      fn();
+    } catch (e) {
+      if (result.formatErrors.length < 20) result.formatErrors.push(f.sheet + '!' + f.range + ' ' + what + '：' + e);
+    }
+  }
+  if (f.fill === null) set('底色', function () { rg.Interior.ColorIndex = -4142; });
+  else if (f.fill) set('底色', function () { rg.Interior.Color = bgr(f.fill); });
+  if (f.fontColor) set('字色', function () { rg.Font.Color = bgr(f.fontColor); });
+  if (f.fontSize) set('字号', function () { rg.Font.Size = f.fontSize; });
+  if (f.bold !== undefined) set('加粗', function () { rg.Font.Bold = f.bold; });
+  if (f.hAlign) set('对齐', function () { rg.HorizontalAlignment = f.hAlign === 'center' ? -4108 : f.hAlign === 'right' ? -4152 : -4131; });
+  if (f.vCenter) set('垂直居中', function () { rg.VerticalAlignment = -4108; });
+  if (f.wrap !== undefined) set('换行', function () { rg.WrapText = f.wrap; });
+  if (f.colWidth) set('列宽', function () { rg.ColumnWidth = f.colWidth; });
+  if (f.rowHeight) set('行高', function () { rg.RowHeight = f.rowHeight; });
+  result.formatted++;
 }
 
 function isSingleCell(values) {
@@ -68,11 +102,15 @@ function main(argv) {
     protocol: PROTOCOL,
     scriptVersion: SCRIPT_VERSION,
     supportsFiles: true,
+    supportsExpect: true,
     ok: true,
     sheets: [],
     missingSheets: [],
     reads: [],
     written: 0,
+    skipped: 0,
+    formatted: 0,
+    formatErrors: [],
     errors: []
   };
   // 在脚本编辑器里直接点「运行」（没有参数）：自检，检查脚本与「云文档API」服务是否可用
@@ -84,7 +122,8 @@ function main(argv) {
   }
   var writes = argv.writes || [];
   var reads = argv.reads || [];
-  if (writes.length > MAX_WRITES || reads.length > MAX_READS) {
+  var formats = argv.formats || [];
+  if (writes.length > MAX_WRITES || reads.length > MAX_READS || formats.length > MAX_FORMATS) {
     result.ok = false;
     result.errors.push('单次读写数量超出限制');
     return result;
@@ -96,13 +135,14 @@ function main(argv) {
   function groupOf(file) {
     var key = file || '';
     if (!groups[key]) {
-      groups[key] = { file: key, writes: [], reads: [] };
+      groups[key] = { file: key, writes: [], reads: [], formats: [] };
       order.push(key);
     }
     return groups[key];
   }
   for (var i = 0; i < writes.length; i++) groupOf(writes[i].file).writes.push(writes[i]);
   for (var j = 0; j < reads.length; j++) groupOf(reads[j].file).reads.push({ index: j, read: reads[j] });
+  for (var k = 0; k < formats.length; k++) groupOf(formats[k].file).formats.push(formats[k]);
   var readResults = [];
   var missing = {};
   result.sheets = listSheetNames(Application);
@@ -134,10 +174,25 @@ function main(argv) {
           continue;
         }
         try {
-          app.Sheets.Item(w.sheet).Range(w.range).Value = isSingleCell(w.values) ? w.values[0][0] : w.values;
+          var target = app.Sheets.Item(w.sheet).Range(w.range);
+          // 条件写入：格子里的内容已被领导改过时不写（例如清空「我要加到」时领导刚好填了新数字）
+          if (w.expect !== undefined && cellText(target.Value2) !== cellText(w.expect)) {
+            result.skipped++;
+            continue;
+          }
+          target.Value = isSingleCell(w.values) ? w.values[0][0] : w.values;
           result.written++;
         } catch (e1) {
           result.errors.push('写入 ' + w.sheet + '!' + w.range + ' 失败：' + e1);
+        }
+      }
+      for (var fi = 0; fi < grp.formats.length; fi++) {
+        var f = grp.formats[fi];
+        if (openError || names.indexOf(f.sheet) < 0) continue;
+        try {
+          applyFormat(app, f, result);
+        } catch (e4) {
+          if (result.formatErrors.length < 20) result.formatErrors.push(f.sheet + '!' + f.range + '：' + e4);
         }
       }
       for (var ri = 0; ri < grp.reads.length; ri++) {

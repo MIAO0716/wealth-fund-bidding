@@ -1,29 +1,40 @@
 /**
- * 模拟金山文档：演练时代替真实金山表格，模拟领导在本单位工作表中填写。
- * 只有领导可编辑的单元格（B11、报价行 B/C 列）可以修改，其余单元格只读，与正式表格的权限设置一致。
+ * 模拟金山文档：演练时代替真实金山表格，模拟领导在本单位表格中填写。
+ * 只有「我要加到」（B6）一个格子可以填写，其余单元格只读，与正式表格的区域权限一致；格式（底色、字号）按脚本写入的显示。
  * 地址：/mock-kdocs?file=模拟文件ID[&sheet=单位名称]（带 sheet 时只显示该单位，模拟领导只能看到本单位）
  */
 
-import { KDOCS_LAYOUT, bidRowRange } from '@bidding/shared';
-import { useEffect, useRef, useState } from 'react';
+import { KDOCS_LAYOUT } from '@bidding/shared';
+import { type CSSProperties, useEffect, useRef, useState } from 'react';
 import { api, errorText } from '../lib/api';
 
 type Cell = string | number | boolean | null;
+interface CellStyle {
+  fill?: string;
+  color?: string;
+  size?: number;
+  bold?: boolean;
+  align?: 'left' | 'center' | 'right';
+  wrap?: boolean;
+}
 interface Snapshot {
   fileId: string;
-  maxRows: number;
-  sheets: Array<{ name: string; cells: Cell[][] }>;
+  sheets: Array<{ name: string; cells: Cell[][]; styles: Array<Array<CellStyle | null>>; colWidths: Array<number | null>; rowHeights: Array<number | null> }>;
 }
 
-const COLS = ['A', 'B', 'C', 'D', 'E'];
-const TARGET_OPTIONS = Array.from({ length: 24 }, (_, i) => String((i + 1) * 5));
+const COLS = ['A', 'B'];
 
-function editable(row: number, col: number, maxRows: number): 'ack' | 'target' | 'confirm' | null {
-  const { first, last } = bidRowRange(maxRows);
-  if (row === KDOCS_LAYOUT.ackRow && col === 2) return 'ack';
-  if (row >= first && row <= last && col === 2) return 'target';
-  if (row >= first && row <= last && col === 3) return 'confirm';
-  return null;
+function cellCss(st: CellStyle | null): CSSProperties {
+  if (!st) return {};
+  return {
+    background: st.fill ? `#${st.fill}` : undefined,
+    color: st.color ? `#${st.color}` : undefined,
+    // 表格字号按「磅」，网页上略放大
+    fontSize: st.size ? Math.round(st.size * 1.15) : undefined,
+    fontWeight: st.bold === undefined ? undefined : st.bold ? 700 : 400,
+    textAlign: st.align,
+    whiteSpace: st.wrap ? 'normal' : undefined,
+  };
 }
 
 export function MockKdocsPage() {
@@ -85,6 +96,14 @@ export function MockKdocsPage() {
       {err && <div className="notice">{err}</div>}
       <div className="mk-scroll">
         <table className="mk-grid">
+          <colgroup>
+            <col className="mk-rh" />
+            {/* 列宽按表格中的比例缩放到屏幕宽度（手机上与金山 App 一样不需要横向滑动） */}
+            {COLS.map((c, i) => {
+              const w = sheet.colWidths.map((x) => x ?? 12);
+              return <col key={c} style={{ width: `${((w[i] / (w[0] + w[1])) * 100).toFixed(1)}%` }} />;
+            })}
+          </colgroup>
           <thead>
             <tr>
               <th className="mk-rh" />
@@ -96,24 +115,25 @@ export function MockKdocsPage() {
           <tbody>
             {sheet.cells.map((row, ri) => {
               const r = ri + 1;
-              const header = r === 1 || r === KDOCS_LAYOUT.headerRow;
+              const h = sheet.rowHeights[ri];
               return (
-                <tr key={r} className={header ? 'mk-head' : r === KDOCS_LAYOUT.ackRow ? 'mk-ack' : ''}>
+                <tr key={r} style={{ height: h ? Math.round(h * 1.33) : undefined }}>
                   <td className="mk-rh">{r}</td>
                   {row.map((v, ci) => {
                     const c = ci + 1;
                     const addr = `${COLS[ci]}${r}`;
-                    const kind = editable(r, c, snap.maxRows);
                     const text = v === null ? '' : String(v);
-                    if (kind === 'target') {
+                    const css = cellCss(sheet.styles[ri]?.[ci] ?? null);
+                    if (r === KDOCS_LAYOUT.inputRow && c === 2) {
                       return (
-                        <td key={c} className="mk-edit">
+                        <td key={c} className="mk-edit mk-input" style={css}>
                           <input
                             key={`${sheet.name}-${addr}-${text}`}
                             defaultValue={text}
                             inputMode="numeric"
-                            list="mk-targets"
-                            aria-label={`${sheet.name} ${addr}`}
+                            placeholder="填数字，如 40"
+                            aria-label={`${sheet.name} 我要加到`}
+                            style={{ color: css.color, fontSize: css.fontSize, fontWeight: css.fontWeight, textAlign: 'center' }}
                             onFocus={() => (editing.current = true)}
                             onBlur={(e) => {
                               editing.current = false;
@@ -126,18 +146,9 @@ export function MockKdocsPage() {
                         </td>
                       );
                     }
-                    if (kind === 'ack' || kind === 'confirm') {
-                      return (
-                        <td key={c} className="mk-edit">
-                          <select value={text} aria-label={`${sheet.name} ${addr}`} onChange={(e) => void setCell(sheet.name, addr, e.target.value)}>
-                            <option value="" />
-                            <option value="确认">确认</option>
-                          </select>
-                        </td>
-                      );
-                    }
+                    const tone = r === 7 && c === 2 ? (text.startsWith('✔') ? 'ok' : text.startsWith('✘') ? 'bad' : '') : '';
                     return (
-                      <td key={c} className={`mk-ro ${c === 4 && text.startsWith('✔') ? 'ok' : c === 4 && text.startsWith('✘') ? 'bad' : ''}`} colSpan={1}>
+                      <td key={c} className={`mk-ro ${tone}`} style={css}>
                         {text}
                       </td>
                     );
@@ -148,12 +159,7 @@ export function MockKdocsPage() {
           </tbody>
         </table>
       </div>
-      <datalist id="mk-targets">
-        {TARGET_OPTIONS.map((o) => (
-          <option key={o} value={o} />
-        ))}
-      </datalist>
-      <p className="mk-foot">黄色单元格可填写；其余单元格由竞标程序写入，只读。页面每 1.5 秒自动刷新。</p>
+      <p className="mk-foot">只有黄色的「我要加到」可以填写；其余单元格由竞标程序写入，只读。页面每 1.5 秒自动刷新。</p>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 /**
- * 金山文档接入（使用模拟金山文档）：领导在表格中确认底标、填写「加到多少」→ 程序读取 → 大屏更新 → 结果写回表格。
+ * 金山文档接入（使用模拟金山文档）：领导在「我要加到」填一个数字（首次填写即确认底标）→ 程序读取 → 大屏更新 → 结果写回表格。
  */
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -19,7 +19,7 @@ const MIN: Record<number, number> = { 1: 5, 2: 10, 3: 15 };
 
 test.setTimeout(120_000);
 
-test('领导在（模拟）金山文档中填写：确认底标 → 加码生效 → 大屏同步 → 表格显示结果', async ({ browser, baseURL }) => {
+test('领导在（模拟）金山文档中只填一个格子：加码生效（同时认领底标）→ 大屏同步 → 表格显示结果', async ({ browser, baseURL }) => {
   const admin = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const req = admin.request;
   expect((await req.post('/api/v1/auth/admin/login', { headers: H, data: { username: 'admin', password: 'e2e-password-123' } })).ok()).toBe(true);
@@ -87,34 +87,32 @@ test('领导在（模拟）金山文档中填写：确认底标 → 加码生效
   // 浦东的文件里只有浦东一张表，看不到其他单位
   await expect(sheet.locator('.mk-tab')).toHaveCount(1);
   const row = (r: number) => sheet.locator('.mk-grid tbody tr').nth(r - 1);
-  await expect(row(11)).toContainText('请在 B11 选择「确认」认领理财底标', { timeout: 10_000 });
-  await sheet.getByLabel('浦东 B11').selectOption('确认');
+  await expect(row(2)).toContainText('理财 · 本组竞标中，可以加码', { timeout: 10_000 });
+  await expect(row(3)).toContainText('首次填写即确认');
+  const input = sheet.getByLabel('浦东 我要加到');
+  await input.fill('35');
+  await input.press('Enter');
   // 不点读取就不会处理
   await sheet.waitForTimeout(1500);
-  await expect(row(11)).not.toContainText('已确认');
-  await readOnce();
-  await expect(page.locator('.kd-read')).toContainText('认领底标 1 家（浦东）');
-  await expect(row(11)).toContainText('已确认（理财', { timeout: 10_000 });
+  await expect(row(7)).not.toContainText('已生效');
 
-  await sheet.getByLabel('浦东 B13').fill('35');
-  await sheet.getByLabel('浦东 B13').press('Enter');
-  await sheet.getByLabel('浦东 C13').selectOption('确认');
   const t0 = Date.now();
   await readOnce();
   await expect(pdCurrent).toContainText('35', { timeout: 10_000 });
   console.log(`点「读取金山表格」→ 大屏显示 35% 用时 ${Date.now() - t0} ms`);
-  await expect(page.locator('.kd-read')).toContainText('新生效 1 条（浦东）');
-  await expect(row(13)).toContainText('✔ 已生效：30% → 35%', { timeout: 10_000 });
-  await expect(row(8)).toContainText('35%');
+  await expect(page.locator('.kd-read')).toContainText('新生效 1 条、认领底标 1 家（浦东）');
+  await expect(row(7)).toContainText('✔ 理财已生效：30% → 35%', { timeout: 10_000 });
+  await expect(input).toHaveValue('');
+  await expect(row(4)).toContainText('35%');
+  await expect(row(3)).toContainText('（已确认）');
   await sheet.screenshot({ path: `${SHOTS}/kdocs-mock-sheet.png` });
 
-  // 填低了：不生效
-  await sheet.getByLabel('浦东 B14').fill('30');
-  await sheet.getByLabel('浦东 B14').press('Enter');
-  await sheet.getByLabel('浦东 C14').selectOption('确认');
+  // 填低了：不生效，写明原因
+  await input.fill('30');
+  await input.press('Enter');
   await readOnce();
   await expect(page.locator('.kd-read')).toContainText('未生效 1 条（浦东）');
-  await expect(row(14)).toContainText('✘ 未生效', { timeout: 10_000 });
+  await expect(row(7)).toContainText('✘ 「30」未生效', { timeout: 10_000 });
   await expect(pdCurrent).toContainText('35');
 
   // 现场控制中来源标注「金山文档」；金山文档页看到处理记录
@@ -124,6 +122,13 @@ test('领导在（模拟）金山文档中填写：确认底标 → 加码生效
   await expect(page.getByText('已生效 1 · 未生效 1')).toBeVisible({ timeout: 10_000 });
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: `${SHOTS}/kdocs-admin.png`, fullPage: true });
+
+  // 领导扫码填报卡：每家一张，二维码即本单位文件
+  await page.getByRole('button', { name: '生成扫码填报卡' }).click();
+  const modal = page.locator('.modal-body');
+  await expect(modal.locator('.leader-card')).toHaveCount(16);
+  await expect(modal.locator('.leader-card').first()).toContainText('黄色「我要加到」格子');
+  await modal.locator('.leader-card').first().screenshot({ path: `${SHOTS}/kdocs-card.png` });
 
   await Promise.all([admin.close(), screenCtx.close(), phone.close()]);
 });

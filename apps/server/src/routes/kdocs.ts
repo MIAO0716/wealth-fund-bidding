@@ -3,7 +3,7 @@ import type { AppDeps } from '../app';
 import { bizError } from '../lib/errors';
 import { actorOf } from '../services/auth';
 import { getEventRow } from '../services/events';
-import { connectKdocs, getKdocsOverview, initKdocsLayout, saveKdocsBinding, testKdocs, useKdocsMock } from '../services/kdocs/admin';
+import { connectKdocs, getKdocsOverview, initKdocsLayout, kdocsCards, saveKdocsBinding, testKdocs, useKdocsMock } from '../services/kdocs/admin';
 import { AIRSCRIPT_SOURCE } from '../services/kdocs/airscript';
 import { buildKdocsTemplate, buildKdocsTemplateZip } from '../services/kdocs/template';
 
@@ -26,6 +26,8 @@ export function registerKdocsAdminRoutes(api: FastifyInstance, deps: AppDeps): v
   const actor = (req: FastifyRequest) => actorOf(req.session!);
 
   api.get<{ Params: P }>('/admin/events/:eventId/kdocs', auth, async (req) => getKdocsOverview(kdocs, req.params.eventId));
+
+  api.get<{ Params: P }>('/admin/events/:eventId/kdocs/cards', auth, async (req) => kdocsCards(kdocs, req.params.eventId));
 
   api.put<{ Params: P }>('/admin/events/:eventId/kdocs', auth, async (req) => saveKdocsBinding(kdocs, req.params.eventId, actor(req), body(req)));
 
@@ -53,8 +55,7 @@ export function registerKdocsAdminRoutes(api: FastifyInstance, deps: AppDeps): v
 
   api.get<{ Params: P }>('/admin/events/:eventId/kdocs/template.xlsx', auth, async (req, reply) => {
     const ev = await getEventRow(ctx.db, req.params.eventId);
-    const b = await kdocs.sync.binding(req.params.eventId);
-    const buf = await buildKdocsTemplate({ title: String((ev.config as { name?: string }).name || '理财、基金现场竞标'), maxRows: b?.max_rows ?? 40 });
+    const buf = await buildKdocsTemplate({ title: String((ev.config as { name?: string }).name || '理财、基金现场竞标') });
     return reply
       .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
       .header('Content-Disposition', attachment('kdocs-template.xlsx', '金山文档填报表模板.xlsx'))
@@ -63,8 +64,7 @@ export function registerKdocsAdminRoutes(api: FastifyInstance, deps: AppDeps): v
 
   api.get<{ Params: P }>('/admin/events/:eventId/kdocs/template-files.zip', auth, async (req, reply) => {
     const ev = await getEventRow(ctx.db, req.params.eventId);
-    const b = await kdocs.sync.binding(req.params.eventId);
-    const buf = await buildKdocsTemplateZip({ title: String((ev.config as { name?: string }).name || '理财、基金现场竞标'), maxRows: b?.max_rows ?? 40 });
+    const buf = await buildKdocsTemplateZip({ title: String((ev.config as { name?: string }).name || '理财、基金现场竞标') });
     return reply
       .header('Content-Type', 'application/zip')
       .header('Content-Disposition', attachment('kdocs-unit-files.zip', '金山文档填报表-每家单位一个文件.zip'))

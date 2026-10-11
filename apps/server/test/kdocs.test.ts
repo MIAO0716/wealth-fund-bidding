@@ -1,4 +1,4 @@
-import { KDOCS_LAYOUT, UNITS } from '@bidding/shared';
+import { UNITS } from '@bidding/shared';
 import ExcelJS from 'exceljs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { KdocsError, callScript, normalizeWebhookUrl } from '../src/services/kdocs/client';
@@ -54,42 +54,47 @@ const edit = (fileId: string, sheet: string, addr: string, value: unknown) => mo
 /** 从概览中取出「单位 链接」清单文本 */
 const filesText = (o: any) => (o.binding.unitFiles ?? []).map((f: any) => `${f.unitName} ${f.url}`).join('\n');
 
-/** 领导确认认领底标（发布后程序先清空 B11 并提示，之后选「确认」才有效） */
-async function ackViaDoc(eventId: string, fileId: string, unitName: string) {
-  await syncNow(eventId);
-  expect(String(cell(fileId, unitName, 'C11'))).toContain('请在 B11 选择「确认」');
-  edit(fileId, unitName, 'B11', '确认');
-  await syncNow(eventId);
-  expect(String(cell(fileId, unitName, 'C11'))).toContain('已确认（理财');
-}
+/** 领导在「我要加到」（B6）填写 */
+const fill = (fileId: string, unitName: string, value: unknown) => edit(fileId, unitName, 'B6', value);
+const result = (fileId: string, unitName: string) => String(cell(fileId, unitName, 'B7') ?? '');
 
 describe('AirScript 与接口', () => {
-  it('脚本在模拟工作簿中运行：先写后读，缺失工作表如实报告，协议版本不符时拒绝', () => {
+  it('脚本在模拟工作簿中运行：先写后读，缺失工作表如实报告，协议版本不符时拒绝；条件写入与格式', () => {
     const wb = new MockWorkbook('t');
     wb.addSheet('浦东');
     const r = runAirScript(wb, {
       protocol: 1,
       action: 'batch',
       writes: [
-        { sheet: '浦东', range: 'B13:C13', values: [['35', '确认']] },
-        { sheet: '浦东', range: 'B11', values: [['确认']] },
+        { sheet: '浦东', range: 'B6', values: [['35']] },
+        { sheet: '浦东', range: 'B2:B3', values: [['a'], ['b']] },
         { sheet: '闵行', range: 'A1', values: [['x']] },
       ],
       reads: [
-        { sheet: '浦东', range: 'B11:C13' },
-        { sheet: '闵行', range: 'B11:C13' },
+        { sheet: '浦东', range: 'B2:B6' },
+        { sheet: '闵行', range: 'B6' },
       ],
     }) as any;
     expect(r.ok).toBe(true);
+    expect(r.supportsExpect).toBe(true);
     expect(r.written).toBe(2);
     expect(r.missingSheets).toEqual(['闵行']);
-    expect(r.reads[0].values).toEqual([
-      ['确认', null],
-      [null, null],
-      ['35', '确认'],
-    ]);
+    expect(r.reads[0].values).toEqual([['a'], ['b'], [null], [null], ['35']]);
     expect(r.reads[1].values).toBeNull();
     expect((runAirScript(wb, { protocol: 99 }) as any).ok).toBe(false);
+    // 条件写入：格子里仍是 35（数字或文本均可比较）才清空；已被改成 40 时跳过
+    const c1 = runAirScript(wb, { protocol: 1, writes: [{ sheet: '浦东', range: 'B6', values: [['']], expect: 35 }], reads: [{ sheet: '浦东', range: 'B6' }] }) as any;
+    expect(c1).toMatchObject({ written: 1, skipped: 0 });
+    expect(c1.reads[0].values).toEqual([[null]]);
+    wb.sheet('浦东')!.write('B6', 40);
+    const c2 = runAirScript(wb, { protocol: 1, writes: [{ sheet: '浦东', range: 'B6', values: [['']], expect: '35' }], reads: [{ sheet: '浦东', range: 'B6' }] }) as any;
+    expect(c2).toMatchObject({ written: 0, skipped: 1 });
+    expect(c2.reads[0].values).toEqual([[40]]);
+    // 格式：底色、字号、列宽
+    const f = runAirScript(wb, { protocol: 1, formats: [{ sheet: '浦东', range: 'B6', fill: 'FFF1B8', fontSize: 22, bold: true, colWidth: 34 }] }) as any;
+    expect(f).toMatchObject({ formatted: 1, formatErrors: [] });
+    expect(wb.sheet('浦东')!.styles.get('6,2')).toMatchObject({ fill: 'FFF1B8', size: 22, bold: true });
+    expect(wb.sheet('浦东')!.colWidths.get(2)).toBe(34);
     // 跨文件读写：与金山一致，同一时刻只能额外打开一个文件；脚本逐个打开、读写、关闭
     const files = new Map<string, MockWorkbook>(['a', 'b', 'c'].map((id) => {
       const f = new MockWorkbook(id);
@@ -147,11 +152,16 @@ describe('AirScript 与接口', () => {
 });
 
 describe('配置与表格初始化', () => {
-  it('使用模拟金山文档：写好 16 张表的版式；测试连接列出工作表；令牌不回显', async () => {
+  it('使用模拟金山文档：写好 16 家的极简版式与格式；测试连接列出工作表；令牌不回显', async () => {
     const { eventId, fileId } = await prepared({ enable: false });
-    expect(cell(fileId, '浦东', 'A12')).toBe('序号');
-    expect(cell(fileId, '浦东', 'B12')).toBe('加到（%）');
-    expect(cell(fileId, '崇明', `A${KDOCS_LAYOUT.firstBidRow}`)).toBe(1);
+    expect(cell(fileId, '浦东', 'A1')).toBe('浦东');
+    expect(String(cell(fileId, '浦东', 'B1'))).toMatch(/^第一组 · /);
+    expect(cell(fileId, '浦东', 'A6')).toBe('我要加到');
+    expect(cell(fileId, '崇明', 'A7')).toBe('处理结果');
+    expect(String(cell(fileId, '浦东', 'B8'))).toContain('首次填写即视为确认本专场底标');
+    const sheet = mock().file(fileOf(fileId, '浦东'))!.sheet('浦东')!;
+    expect(sheet.styles.get('6,2')).toMatchObject({ fill: 'FFF1B8', bold: true });
+    expect(sheet.styles.get('1,1')).toMatchObject({ fill: 'B91C1C', color: 'FFFFFF' });
     const t = await call(ctx.app, 'POST', api(eventId, '/test'), { cookie: ctx.adminCookie, body: {} });
     expect(t.body.ok).toBe(true);
     expect(t.body.missingUnits).toEqual([]);
@@ -161,7 +171,18 @@ describe('配置与表格初始化', () => {
     expect(o.body.binding.isMock).toBe(true);
   });
 
-  it('同步开启时不能清空填写区；模板包含说明表与 16 张单位表', async () => {
+  it('旧版式（多行报价表）的残留内容在写入版式时清空', async () => {
+    const { eventId, fileId } = await prepared({ enable: false });
+    const sheet = mock().file(fileOf(fileId, '浦东'))!.sheet('浦东')!;
+    sheet.write('A12:E13', [['序号', '加到（%）', '确认', '处理结果', '处理时间'], [1, 35, '确认', '✔ 已生效', '10:00:00']]);
+    sheet.write('C11', '已确认');
+    const r = await call(ctx.app, 'POST', api(eventId, '/init-layout'), { cookie: ctx.adminCookie, body: { clearInputs: false } });
+    expect(r.status).toBe(200);
+    expect(sheet.read('A10:F60').flat().every((v) => v === null)).toBe(true);
+    expect(sheet.read('C1:F9').flat().every((v) => v === null)).toBe(true);
+  });
+
+  it('同步开启时不能清空填写区；模板只有 A、B 两列，「我要加到」带数字校验，单位表在说明表之前', async () => {
     const { eventId } = await prepared();
     const r = await call(ctx.app, 'POST', api(eventId, '/init-layout'), { cookie: ctx.adminCookie, body: { clearInputs: true } });
     expect(r.status).toBe(422);
@@ -170,8 +191,11 @@ describe('配置与表格初始化', () => {
     expect(res.statusCode).toBe(200);
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(res.rawPayload as unknown as ArrayBuffer);
-    expect(wb.worksheets.map((w) => w.name)).toEqual(['使用说明', ...UNITS.map((u) => u.name)]);
-    expect(wb.getWorksheet('浦东')!.getCell('C13').dataValidation?.formulae).toEqual(['"确认"']);
+    expect(wb.worksheets.map((w) => w.name)).toEqual([...UNITS.map((u) => u.name), '使用说明']);
+    const pd = wb.getWorksheet('浦东')!;
+    expect(pd.getCell('A6').value).toBe('我要加到');
+    expect(pd.getCell('B6').dataValidation?.type).toBe('whole');
+    expect(pd.columnCount).toBe(2);
     const zip = await ctx.app.inject({ method: 'GET', url: api(eventId, '/template-files.zip'), headers: { cookie: ctx.adminCookie } });
     expect(zip.statusCode).toBe(200);
     expect(zip.rawPayload.subarray(0, 4).toString('hex')).toBe('504b0304');
@@ -179,53 +203,72 @@ describe('配置与表格初始化', () => {
     expect(zip.rawPayload.includes(Buffer.from('00-竞标总控（只给工作人员）.xlsx'))).toBe(true);
     const script = await ctx.app.inject({ method: 'GET', url: '/api/v1/admin/kdocs/airscript.js', headers: { cookie: ctx.adminCookie } });
     expect(script.body).toContain('return main(Context.argv);');
+    expect(script.body).toContain('v1.3.0');
+  });
+
+  it('金山表格里还是旧版脚本：测试连接提示重新下载脚本', async () => {
+    const respond = (async () =>
+      new Response(JSON.stringify({ status: 'finished', error: '', data: { result: { protocol: 1, ok: true, supportsFiles: true, sheets: [], reads: [] } } }), {
+        status: 200,
+      })) as unknown as typeof fetch;
+    const { eventId } = await prepared({ enable: false });
+    const saved = ctx.kdocs.sync.callOpts.fetchImpl;
+    ctx.kdocs.sync.callOpts.fetchImpl = respond;
+    try {
+      const t = await call(ctx.app, 'POST', api(eventId, '/test'), { cookie: ctx.adminCookie, body: {} });
+      expect(t.status).toBe(422);
+      expect(t.body.error.message).toContain('需要 1.3.0 及以上');
+    } finally {
+      ctx.kdocs.sync.callOpts.fetchImpl = saved;
+    }
   });
 });
 
 describe('通过金山文档竞标', () => {
-  it('认领底标 → 加码生效；重复、填错、未确认、改已处理的行、非本组均不会多记；信息区与大屏同步', async () => {
+  it('首次填写即认领底标并加码；读取后清空格子、结果写在 B7；重复、填错、非本组均不会多记；信息区与大屏同步', async () => {
     const { eventId, fileId } = await prepared({ live: true });
-    await ackViaDoc(eventId, fileId, '浦东');
-
-    // 加到 35%
-    edit(fileId, '浦东', 'B13', '35');
-    edit(fileId, '浦东', 'C13', '确认');
     await syncNow(eventId);
-    expect(String(cell(fileId, '浦东', 'D13'))).toMatch(/^✔ 已生效：30% → 35%（回执 LC-PD-001-\d+）$/);
-    expect(cell(fileId, '浦东', 'E13')).toMatch(/^\d\d:\d\d:\d\d$/);
-    expect(cell(fileId, '浦东', 'B8')).toBe('35%');
-    expect(cell(fileId, '浦东', 'B10')).toBe('40 / 45 / 50 / 55');
+    expect(String(cell(fileId, '浦东', 'B3'))).toContain('（首次填写即确认）');
+    expect(cell(fileId, '浦东', 'B5')).toBe('35 / 40 / 45 / 50');
+
+    // 加到 35%：同时认领底标
+    fill(fileId, '浦东', '35');
+    const r1 = await syncNow(eventId);
+    expect(r1.status.lastRead).toMatchObject({ applied: 1, acked: 1, units: ['浦东'] });
+    expect(result(fileId, '浦东')).toMatch(/^✔ 理财已生效：30% → 35%，并确认底标（\d\d:\d\d:\d\d）$/);
+    expect(cell(fileId, '浦东', 'B6')).toBeNull();
+    expect(cell(fileId, '浦东', 'B4')).toBe('35%');
+    expect(cell(fileId, '浦东', 'B5')).toBe('40 / 45 / 50 / 55');
+    expect(String(cell(fileId, '浦东', 'B3'))).toContain('（已确认）');
+    expect(cell(fileId, '浦东', 'B2')).toBe('理财 · 本组竞标中，可以加码');
     const rec = await ctx.db.query(`SELECT source, actor_type, to_pp FROM bid_records WHERE event_id = $1`, [eventId]);
     expect(rec.rows).toEqual([{ source: 'KDOCS', actor_type: 'LEADER', to_pp: 35 }]);
+    const ack = await ctx.db.query(`SELECT base_ack_source FROM bid_states WHERE event_id = $1 AND project_code = 'wealth' AND unit_code = 'PD'`, [eventId]);
+    expect(ack.rows[0].base_ack_source).toBe('KDOCS');
 
     // 重复填 35：不重复加码
-    edit(fileId, '浦东', 'B14', 35);
-    edit(fileId, '浦东', 'C14', '确认');
+    fill(fileId, '浦东', 35);
+    await syncNow(eventId);
+    expect(result(fileId, '浦东')).toContain('✘ 「35」未生效：新增幅 35% 必须高于已确认增幅 35%');
+    expect(result(fileId, '浦东')).toContain('请重新填写');
     // 无法识别的数值
-    edit(fileId, '浦东', 'B15', '四十');
-    edit(fileId, '浦东', 'C15', '确认');
-    // 填了未确认
-    edit(fileId, '浦东', 'B16', '40%');
+    fill(fileId, '浦东', '四十');
     await syncNow(eventId);
-    expect(String(cell(fileId, '浦东', 'D14'))).toContain('✘ 未生效：新增幅 35% 必须高于已确认增幅 35%');
-    expect(String(cell(fileId, '浦东', 'D15'))).toContain('无法识别');
-    expect(cell(fileId, '浦东', 'D16')).toBe('待确认：请在 C 列选择「确认」后生效');
-
-    // 确认后生效；之后改已处理的行无效
-    edit(fileId, '浦东', 'C16', '是');
-    edit(fileId, '浦东', 'B13', '60');
+    expect(result(fileId, '浦东')).toContain('无法识别');
+    expect(cell(fileId, '浦东', 'B6')).toBeNull();
+    // 「40%」也能识别
+    fill(fileId, '浦东', '40%');
     await syncNow(eventId);
-    expect(String(cell(fileId, '浦东', 'D16'))).toContain('已生效：35% → 40%');
-    expect(String(cell(fileId, '浦东', 'D13'))).toContain('此行已处理，之后的修改无效');
+    expect(result(fileId, '浦东')).toContain('已生效：35% → 40%');
     const n = await ctx.db.query(`SELECT count(*)::int AS n, max(to_pp) AS top FROM bid_records WHERE event_id = $1`, [eventId]);
     expect(n.rows[0]).toEqual({ n: 2, top: 40 });
 
-    // 第二组（黄浦）尚未开放
-    edit(fileId, '黄浦', 'B13', '20');
-    edit(fileId, '黄浦', 'C13', '确认');
+    // 第二组（黄浦）尚未开放：加码不生效
+    expect(cell(fileId, '黄浦', 'B2')).toBe('理财 · 竞标中，尚未轮到本组');
+    expect(cell(fileId, '黄浦', 'B5')).toBe('轮到本组后可填');
+    fill(fileId, '黄浦', '20');
     await syncNow(eventId);
-    expect(String(cell(fileId, '黄浦', 'D13'))).toMatch(/✘ 未生效：(尚未轮到本组|请先确认认领基础底标)/);
-    expect(cell(fileId, '黄浦', 'B5')).toBe('竞标中，尚未轮到本组');
+    expect(result(fileId, '黄浦')).toMatch(/✘ 「20」未生效：/);
 
     // 大屏同步
     const screen = await call(ctx.app, 'GET', `/api/v1/admin/events/${eventId}/state`, { cookie: ctx.adminCookie });
@@ -233,30 +276,50 @@ describe('通过金山文档竞标', () => {
     expect(pd.currentPp).toBe(40);
   });
 
-  it('首次开启同步前已填写的行不参与竞标（便于反复演练）', async () => {
-    const { eventId, fileId } = await prepared({ enable: false, live: true });
-    edit(fileId, '浦东', 'B13', '35');
-    edit(fileId, '浦东', 'C13', '确认');
-    await enable(eventId);
+  it('读取与清空之间领导改了数字：新数字不会被清掉，下次读取照常处理', async () => {
+    const { eventId, fileId } = await prepared({ live: true });
+    await syncNow(eventId); // 等开放本组后的那次读取完成
+    fill(fileId, '浦东', '35');
+    // 脚本读到 35 之后、清空之前，领导改成了 40：在第一次调用返回后修改
+    const m = mock();
+    const orig = m.syncTask.bind(m);
+    let calls = 0;
+    m.syncTask = async (...args: Parameters<typeof orig>) => {
+      const out = await orig(...args);
+      if (++calls === 1) fill(fileId, '浦东', '40');
+      return out;
+    };
+    try {
+      await syncNow(eventId);
+    } finally {
+      m.syncTask = orig;
+    }
+    expect(result(fileId, '浦东')).toContain('已生效：30% → 35%');
+    expect(cell(fileId, '浦东', 'B6')).toBe('40');
     await syncNow(eventId);
-    expect(cell(fileId, '浦东', 'D13')).toBe('— 开始同步前已填写，未处理');
+    expect(result(fileId, '浦东')).toContain('已生效：35% → 40%');
+    expect(cell(fileId, '浦东', 'B6')).toBeNull();
+  });
+
+  it('首次开启前格子里已有的数字不参与竞标并清空（便于反复演练）', async () => {
+    const { eventId, fileId } = await prepared({ enable: false, live: true });
+    fill(fileId, '浦东', '35');
+    await enable(eventId);
+    expect(result(fileId, '浦东')).toBe('— 「35」开始读取前已填写，未处理，请重新填写');
+    expect(cell(fileId, '浦东', 'B6')).toBeNull();
     const n = await ctx.db.query('SELECT count(*)::int AS n FROM bid_records WHERE event_id = $1', [eventId]);
     expect(n.rows[0].n).toBe(0);
-    // 暂停同步期间填写的行，恢复后照常处理（不会被当作同步前已填写）
-    await ackViaDoc(eventId, fileId, '浦东');
+    // 停用读取期间填写的数字，重新启用后照常处理（不会被当作开启前已填写）
     await enable(eventId, false);
-    edit(fileId, '浦东', 'B14', '35');
-    edit(fileId, '浦东', 'C14', '确认');
+    fill(fileId, '浦东', '35');
     await enable(eventId, true);
-    expect(String(cell(fileId, '浦东', 'D14'))).toContain('已生效：30% → 35%');
+    expect(result(fileId, '浦东')).toContain('已生效：30% → 35%');
   });
 
   it('结束本组前先读取一次：最后一刻的填写仍按开放状态处理', async () => {
     const { eventId, fileId } = await prepared({ live: true });
-    await ackViaDoc(eventId, fileId, '浦东');
-    edit(fileId, '浦东', 'B13', '35');
-    edit(fileId, '浦东', 'C13', '确认');
-    // 不手动同步，直接结束本组
+    fill(fileId, '浦东', '35');
+    // 不手动读取，直接结束本组
     const r = await control(ctx, eventId, 'wealth', 'CLOSE_GROUP', { groupNo: 1 });
     expect(r.status).toBe(200);
     expect(r.body.kdocsWarning).toBeUndefined();
@@ -264,46 +327,71 @@ describe('通过金山文档竞标', () => {
     expect(b.rows).toEqual([{ to_pp: 35 }]);
   });
 
-  it('程序中断后重复处理同一行：不会重复加码，回执相同', async () => {
+  it('程序中断（已加码、未记录、未清空）后重新读取：不会重复加码，结果相同', async () => {
     const { eventId, fileId } = await prepared({ live: true });
-    await ackViaDoc(eventId, fileId, '浦东');
-    edit(fileId, '浦东', 'B13', '35');
-    edit(fileId, '浦东', 'C13', '确认');
+    fill(fileId, '浦东', '35');
     await syncNow(eventId);
-    const before = String(cell(fileId, '浦东', 'D13'));
-    // 模拟「已加码但处理记录未写入」：删除处理记录并重启同步
+    // 补记的结果与原来相同（底标已在第一次认领，不再重复提示）
+    const strip = (t: string) => t.replace(/（\d\d:\d\d:\d\d）/, '').replace('，并确认底标', '');
+    const before = strip(result(fileId, '浦东'));
+    // 模拟「已加码但处理记录未写入、格子未清空」：删除处理记录、把数字放回去并重启同步
     await ctx.db.query('DELETE FROM kdocs_rows WHERE event_id = $1', [eventId]);
     await enable(eventId, false);
+    fill(fileId, '浦东', '35');
     await enable(eventId, true);
-    await syncNow(eventId);
     const n = await ctx.db.query('SELECT count(*)::int AS n FROM bid_records WHERE event_id = $1', [eventId]);
     expect(n.rows[0].n).toBe(1);
-    expect(String(cell(fileId, '浦东', 'D13'))).toBe(before);
+    expect(strip(result(fileId, '浦东'))).toBe(before);
+    expect(cell(fileId, '浦东', 'B6')).toBeNull();
   });
 
-  it('换专场：上一专场的「确认」不会用于认领下一专场底标', async () => {
+  it('写回结果前中断：重启后上次处理过的数字还留在格子里，不会再处理', async () => {
     const { eventId, fileId } = await prepared({ live: true });
-    await ackViaDoc(eventId, fileId, '浦东');
-    for (const g of [1]) await control(ctx, eventId, 'wealth', 'CLOSE_GROUP', { groupNo: g });
+    await syncNow(eventId); // 等开放本组后的那次读取完成
+    fill(fileId, '浦东', '35');
+    // 第二次调用（写回结果与清空）失败
+    const m = mock();
+    const orig = m.syncTask.bind(m);
+    let calls = 0;
+    m.syncTask = async (...args: Parameters<typeof orig>) => (++calls === 2 ? { httpStatus: 503, body: { error: '模拟：中断' } } : orig(...args));
+    try {
+      await syncNow(eventId).catch(() => {});
+    } finally {
+      m.syncTask = orig;
+    }
+    expect(cell(fileId, '浦东', 'B6')).toBe('35');
+    await enable(eventId, false);
+    await enable(eventId, true);
+    expect(cell(fileId, '浦东', 'B6')).toBeNull();
+    const n = await ctx.db.query(`SELECT count(*)::int AS n FROM kdocs_rows WHERE event_id = $1`, [eventId]);
+    expect(n.rows[0].n).toBe(1);
+    expect(result(fileId, '浦东')).toContain('已生效：30% → 35%');
+  });
+
+  it('换专场：基金专场第一次填写时再认领基金底标', async () => {
+    const { eventId, fileId } = await prepared({ live: true });
+    fill(fileId, '浦东', '35');
+    await syncNow(eventId);
+    await control(ctx, eventId, 'wealth', 'CLOSE_GROUP', { groupNo: 1 });
     await control(ctx, eventId, 'wealth', 'PAUSE');
     expect((await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true })).status).toBe(200);
-    expect((await publish(ctx, eventId, 'fund')).status).toBe(200);
-    expect(cell(fileId, '浦东', 'B11')).toBe('确认');
+    await goLive(ctx, eventId, 'fund', 1);
     await syncNow(eventId);
-    expect(cell(fileId, '浦东', 'B11')).toBeNull();
-    expect(String(cell(fileId, '浦东', 'C11'))).toContain('认领基金底标');
+    expect(String(cell(fileId, '浦东', 'B2'))).toContain('基金 · ');
+    expect(String(cell(fileId, '浦东', 'B3'))).toContain('（首次填写即确认）');
     const ack = await ctx.db.query(`SELECT base_ack_at FROM bid_states WHERE event_id = $1 AND project_code = 'fund' AND unit_code = 'PD'`, [eventId]);
     expect(ack.rows[0].base_ack_at).toBeNull();
-    edit(fileId, '浦东', 'B11', '确认');
+    const first = String(cell(fileId, '浦东', 'B5')).split(' / ')[0];
+    fill(fileId, '浦东', first);
     await syncNow(eventId);
-    expect(String(cell(fileId, '浦东', 'C11'))).toContain('已确认（基金');
+    expect(result(fileId, '浦东')).toContain('基金已生效');
+    expect(result(fileId, '浦东')).toContain('并确认底标');
     const src = await ctx.db.query(`SELECT base_ack_source FROM bid_states WHERE event_id = $1 AND project_code = 'fund' AND unit_code = 'PD'`, [eventId]);
     expect(src.rows[0].base_ack_source).toBe('KDOCS');
   });
 
   it('金山文档不可用：显示错误、不阻塞现场操作，恢复后自动继续', async () => {
     const { eventId, fileId } = await prepared({ live: true });
-    await ackViaDoc(eventId, fileId, '浦东');
     mock().failNext = 100;
     const r = await call(ctx.app, 'POST', api(eventId, '/sync-now'), { cookie: ctx.adminCookie, body: {} });
     expect(r.status).toBe(422);
@@ -316,28 +404,25 @@ describe('通过金山文档竞标', () => {
     expect(p.body.kdocsWarning).toContain('读取金山文档失败');
     mock().failNext = 0;
     await control(ctx, eventId, 'wealth', 'RESUME');
-    edit(fileId, '浦东', 'B13', '35');
-    edit(fileId, '浦东', 'C13', '确认');
+    fill(fileId, '浦东', '35');
     await syncNow(eventId);
-    expect(String(cell(fileId, '浦东', 'D13'))).toContain('已生效');
+    expect(result(fileId, '浦东')).toContain('已生效');
     const o2 = await call(ctx.app, 'GET', api(eventId), { cookie: ctx.adminCookie });
     expect(o2.body.status.state).toBe('RUNNING');
     expect(o2.body.counts.APPLIED).toBe(1);
   });
 
-  it('后台定时同步（不手动触发）：看到「请确认」提示后选择「确认」，不会被程序清掉', async () => {
+  it('后台定时读取（不手动触发）：填写后自动生效并清空', async () => {
     const { eventId, fileId } = await prepared({ enable: false, live: true });
     await call(ctx.app, 'PUT', api(eventId), { cookie: ctx.adminCookie, body: { enabled: true, intervalSec: 1, autoSync: true } });
     const waitFor = async (cond: () => boolean) => {
       for (let i = 0; i < 50 && !cond(); i++) await new Promise((r) => setTimeout(r, 200));
       return cond();
     };
-    expect(await waitFor(() => String(cell(fileId, '浦东', 'C11')).includes('请在 B11'))).toBe(true);
-    edit(fileId, '浦东', 'B11', '确认');
-    expect(await waitFor(() => String(cell(fileId, '浦东', 'C11')).includes('已确认'))).toBe(true);
-    edit(fileId, '浦东', 'B13', '35');
-    edit(fileId, '浦东', 'C13', '确认');
-    expect(await waitFor(() => String(cell(fileId, '浦东', 'D13')).includes('已生效'))).toBe(true);
+    expect(await waitFor(() => cell(fileId, '浦东', 'B4') === '30%')).toBe(true);
+    fill(fileId, '浦东', '35');
+    expect(await waitFor(() => result(fileId, '浦东').includes('已生效'))).toBe(true);
+    expect(cell(fileId, '浦东', 'B6')).toBeNull();
     await call(ctx.app, 'PUT', api(eventId), { cookie: ctx.adminCookie, body: { enabled: false } });
   }, 30_000);
 
@@ -368,7 +453,7 @@ describe('一键连接', () => {
       ['启用读取', true],
     ]);
     expect(r.body.overview.binding.enabled).toBe(true);
-    expect(cell(fileId, '浦东', 'A1')).toBe('浦东 · 一键连接测试');
+    expect(cell(fileId, '浦东', 'B1')).toBe('第一组 · 一键连接测试');
   });
 
   it('同一张表格改由新活动同步时，旧活动的同步自动停止', async () => {
@@ -410,12 +495,11 @@ describe('一键连接', () => {
     expect(JSON.stringify(o.body.reusable)).not.toContain('real-token');
     const r = await connect(b, { reuse: true, enable: false });
     expect(r.body.steps[0]).toMatchObject({ ok: true, detail: '已沿用上次的金山表格' });
-    const row = await ctx.db.query('SELECT webhook_url, token, interval_sec, max_rows, unit_files FROM kdocs_bindings WHERE event_id = $1', [b]);
+    const row = await ctx.db.query('SELECT webhook_url, token, interval_sec, unit_files FROM kdocs_bindings WHERE event_id = $1', [b]);
     expect(row.rows[0]).toMatchObject({
       webhook_url: 'https://www.kdocs.cn/api/v3/ide/file/realfile1/script/realscript1/sync_task',
       token: 'real-token-abcd',
       interval_sec: 5,
-      max_rows: 30,
     });
     expect(row.rows[0].unit_files.PD).toBe('https://www.kdocs.cn/l/real-PD');
     await ctx.db.query('DELETE FROM kdocs_bindings WHERE event_id IN ($1, $2)', [a, b]);
@@ -427,16 +511,30 @@ describe('每家单位一个文件（各单位互相看不到）', () => {
     const { eventId, fileId } = await prepared({ live: true });
     expect(fileId).toMatch(/hub$/);
     const pdFile = mock().file(fileOf(fileId, '浦东'))!;
-    expect(pdFile.sheets.map((x) => x.Name)).toEqual(['使用说明', '浦东']);
+    expect(pdFile.sheets.map((x) => x.Name)).toEqual(['浦东', '使用说明']);
     expect(mock().file(fileId)!.sheets.map((x) => x.Name)).toEqual(['使用说明']);
-    await ackViaDoc(eventId, fileId, '浦东');
-    edit(fileId, '浦东', 'B13', '35');
-    edit(fileId, '浦东', 'C13', '确认');
+    fill(fileId, '浦东', '35');
     await syncNow(eventId);
-    expect(String(cell(fileId, '浦东', 'D13'))).toContain('已生效：30% → 35%');
+    expect(result(fileId, '浦东')).toContain('已生效：30% → 35%');
     // 闵行文件中看不到浦东的任何内容
     const mhFile = mock().file(fileOf(fileId, '闵行'))!;
-    expect(JSON.stringify(mhFile.sheets.map((x) => x.read('A1:E52')))).not.toContain('浦东');
+    expect(JSON.stringify(mhFile.sheets.map((x) => x.read('A1:F60')))).not.toContain('浦东');
+  });
+
+  it('扫码填报卡：每家单位一张，二维码指向本单位的文件；一个文件 16 张工作表时不提供', async () => {
+    const { eventId } = await prepared({ enable: false });
+    const r = await call(ctx.app, 'GET', api(eventId, '/cards'), { cookie: ctx.adminCookie });
+    expect(r.status).toBe(200);
+    expect(r.body.cards).toHaveLength(16);
+    expect(r.body.isMock).toBe(true);
+    const pd = r.body.cards.find((c: any) => c.unitCode === 'PD');
+    expect(pd.url).toMatch(/\/mock-kdocs\?file=mock[0-9a-f]+-PD$/);
+    expect(pd.qrDataUrl).toMatch(/^data:image\/png;base64,/);
+    const single = await createFormalEvent(ctx);
+    await call(ctx.app, 'POST', api(single, '/use-mock'), { cookie: ctx.adminCookie, body: { mode: 'single' } });
+    const r2 = await call(ctx.app, 'GET', api(single, '/cards'), { cookie: ctx.adminCookie });
+    expect(r2.status).toBe(422);
+    expect(r2.body.error.message).toContain('每家单位一个文件');
   });
 
   it('单位文件链接清单：缺单位、重复链接、无法识别的行都会提示', async () => {
@@ -470,11 +568,9 @@ describe('每家单位一个文件（各单位互相看不到）', () => {
     expect(mock().file(fileId)!.sheets).toHaveLength(17);
     await enable(eventId);
     await goLive(ctx, eventId, 'wealth', 1);
-    await ackViaDoc(eventId, fileId, '浦东');
-    edit(fileId, '浦东', 'B13', '35');
-    edit(fileId, '浦东', 'C13', '确认');
+    fill(fileId, '浦东', '35');
     await syncNow(eventId);
-    expect(String(cell(fileId, '浦东', 'D13'))).toContain('已生效');
+    expect(result(fileId, '浦东')).toContain('已生效');
     await enable(eventId, false);
   });
 });
@@ -532,17 +628,15 @@ describe('手动读取（默认）', () => {
     expect(first.autoSync).toBe(false);
     expect(first.nextSyncAt).toBeNull();
     // 领导填写后等 2.5 秒：不会被自动读取
-    await ackViaDoc(eventId, fileId, '浦东');
     const callsBefore = (await status()).calls;
-    edit(fileId, '浦东', 'B13', '35');
-    edit(fileId, '浦东', 'C13', '确认');
+    fill(fileId, '浦东', '35');
     await new Promise((r) => setTimeout(r, 2500));
     expect((await status()).calls).toBe(callsBefore);
-    expect(cell(fileId, '浦东', 'D13')).toBeNull();
+    expect(cell(fileId, '浦东', 'B6')).toBe('35');
     // 手动读取：处理并返回结果摘要
     const r = await syncNow(eventId);
-    expect(r.status.lastRead).toMatchObject({ applied: 1, rejected: 0, units: ['浦东'] });
-    expect(String(cell(fileId, '浦东', 'D13'))).toContain('已生效');
+    expect(r.status.lastRead).toMatchObject({ applied: 1, rejected: 0, acked: 1, units: ['浦东'] });
+    expect(result(fileId, '浦东')).toContain('已生效');
     await call(ctx.app, 'PUT', api(eventId), { cookie: ctx.adminCookie, body: { enabled: false } });
   }, 30_000);
 });

@@ -98,7 +98,7 @@ export function KdocsReadBar({ eventId, compact = false, onRead }: { eventId: st
         {(err || st?.state === 'ERROR') && <span className="err-text">读取失败：{err ?? st?.lastError}</span>}
         {!compact && (
           <span className="small muted">
-            {brief.binding.autoSync ? '已开启自动定时读取' : '手动读取：看到金山表格有人填写后点一下'}
+            {brief.binding.autoSync ? '已开启自动定时读取' : '手动读取：领导说填好了，点一下即可'}
             {brief.binding.isMock ? '（模拟金山文档）' : ''}
           </span>
         )}

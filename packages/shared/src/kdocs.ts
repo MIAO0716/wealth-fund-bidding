@@ -1,59 +1,39 @@
 /**
- * 金山文档接入：每个单位一张工作表（表名 = 单位名称），版式固定。
- * 本机程序只通过 AirScript 读写单元格；规则判断全部在本机完成。
+ * 金山文档接入：每个单位一张工作表（表名 = 单位名称），极简版式，只有 A、B 两列，手机竖屏一屏看全：
  *
- *   A1        标题
- *   A2:B10    本单位信息（程序写入，领导只读）
- *   D2:E2     最近同步时间（程序写入）
- *   A11:C11   确认认领底标：B11 由领导选「确认」，C11 为程序回写的状态
- *   A12:E12   报价表头
- *   A13:E..   报价行：B「加到（%）」、C「确认」由领导填写；D「处理结果」、E「处理时间」由程序回写
+ *   A1        标题（单位 · 组别）
+ *   A2:B5     状态 / 底标 / 当前增幅 / 可以加到（程序写入，领导只读）
+ *   B6        我要加到 —— 全表唯一由领导填写的格子
+ *   B7        处理结果（程序回写）
+ *   B8        填写说明
+ *   B9        最近读取时间
+ *
+ * 工作人员点「读取金山表格」时，B6 里的数字就是领导的决定；处理后程序清空 B6，结果写在 B7。
+ * 本专场第一次填写即视为确认认领底标。
  */
 
 export const KDOCS_PROTOCOL = 1;
 
 export const KDOCS_LAYOUT = {
   titleCell: 'A1',
-  infoLabels: [
-    '单位',
-    '组别',
-    '当前专场',
-    '状态',
-    '底标（万元）',
-    '首轮增幅',
-    '当前生效增幅',
-    '当前目标（万元）',
-    '下一步可选「加到」',
-  ],
-  /** 信息值所在区域（B2:B10，与 infoLabels 一一对应） */
-  infoValueRange: 'B2:B10',
-  syncLabelCell: 'D2',
-  syncValueCell: 'E2',
-  ackRow: 11,
-  ackLabel: '确认认领底标 →',
-  headerRow: 12,
-  headers: ['序号', '加到（%）', '确认', '处理结果', '处理时间'],
-  firstBidRow: 13,
-  defaultBidRows: 40,
+  /** A2:A9 的标签 */
+  labels: ['状态', '底标', '当前增幅', '可以加到', '我要加到', '处理结果', '说明', '最近读取'],
+  /** 信息值所在区域（B2:B5，对应 状态 / 底标 / 当前增幅 / 可以加到） */
+  infoValueRange: 'B2:B5',
+  inputRow: 6,
+  inputCell: 'B6',
+  resultCell: 'B7',
+  noteCell: 'B8',
+  syncCell: 'B9',
+  lastRow: 9,
+  note: '只填黄色格子：填一个数字（如 40），填好后告诉工作人员读取。首次填写即视为确认本专场底标。',
+  /** 旧版式（多行报价表）残留区域：写入版式时清空 */
+  legacyRanges: ['C1:F9', 'A10:F60'],
 } as const;
 
-export const KDOCS_CONFIRM_WORD = '确认';
-
-export function bidRowRange(maxRows: number): { first: number; last: number } {
-  return { first: KDOCS_LAYOUT.firstBidRow, last: KDOCS_LAYOUT.firstBidRow + maxRows - 1 };
-}
-
-/** 程序每轮读取的区域：B11:C{最后一行}（底标确认 + 报价行的「加到」「确认」两列） */
-export function kdocsReadRange(maxRows: number): string {
-  return `B${KDOCS_LAYOUT.ackRow}:C${bidRowRange(maxRows).last}`;
-}
-
-/** 单元格值是否表示「确认」：确认 / 是 / √ / ✓ / TRUE（复选框） */
-export function isConfirmCell(v: unknown): boolean {
-  if (v === true) return true;
-  if (typeof v !== 'string') return false;
-  const s = v.trim().toLowerCase();
-  return ['确认', '是', '√', '✓', '✔', 'true', 'yes', 'y'].includes(s);
+/** 程序每次读取的区域：只有「我要加到」一个格子 */
+export function kdocsReadRange(): string {
+  return KDOCS_LAYOUT.inputCell;
 }
 
 export function isBlankCell(v: unknown): boolean {
@@ -98,6 +78,25 @@ export interface KdocsWrite {
   sheet: string;
   range: string;
   values: unknown[][];
+  /** 条件写入（脚本 1.3 起）：只有该区域（单个格子）当前的值仍等于 expect 时才写入，避免清掉领导刚改的内容 */
+  expect?: unknown;
+}
+
+/** 单元格格式（脚本 1.3 起，尽力而为：金山不支持的属性会被忽略，不影响读写） */
+export interface KdocsFormat {
+  file?: string;
+  sheet: string;
+  range: string;
+  /** 底色（RGB 十六进制如 'C8102E'；null 表示清除底色） */
+  fill?: string | null;
+  fontColor?: string;
+  fontSize?: number;
+  bold?: boolean;
+  hAlign?: 'left' | 'center' | 'right';
+  vCenter?: boolean;
+  wrap?: boolean;
+  colWidth?: number;
+  rowHeight?: number;
 }
 
 export interface KdocsRead {
@@ -111,6 +110,7 @@ export interface KdocsBatchArgv {
   action: 'ping' | 'batch';
   writes?: KdocsWrite[];
   reads?: KdocsRead[];
+  formats?: KdocsFormat[];
 }
 
 /** 脚本返回（脚本 → 本机） */
@@ -124,6 +124,12 @@ export interface KdocsBatchResult {
   missingSheets?: string[];
   reads?: Array<{ file?: string; sheet: string; range: string; values: unknown[][] | null; error?: string }>;
   written?: number;
+  /** 条件写入因内容已变化而跳过的数量 */
+  skipped?: number;
+  /** 1.3 起：支持条件写入与格式 */
+  supportsExpect?: boolean;
+  formatted?: number;
+  formatErrors?: string[];
   errors?: string[];
 }
 
