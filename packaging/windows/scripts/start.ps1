@@ -32,8 +32,8 @@ $publicBaseUrl = Get-PublicBaseUrl $cfg $port
 Set-AppEnv $cfg $port $publicBaseUrl
 
 Write-Step '检查数据库结构'
-& $NodeExe (Join-Path $AppDir 'apps\server\dist\migrate.js') *> (Join-Path $LogDir 'migrate.log')
-if ($LASTEXITCODE -ne 0) { Stop-WithError "数据库迁移失败，详见 $LogDir\migrate.log" }
+$code = Invoke-NodeScript 'migrate.js' @() 'migrate'
+if ($code -ne 0) { Stop-WithError "数据库迁移失败，详见 $LogDir\migrate.err.log" }
 Write-Ok '数据库结构已是最新'
 
 $admins = [int](Invoke-Sql $cfg 'SELECT count(*) FROM admins')

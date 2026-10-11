@@ -9,7 +9,13 @@
     <title>现场竞标</title>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- 程序加载后替换为页面内容；脚本没能加载时显示这段提示，而不是一片空白 -->
+    <div id="root">
+      <div style="font: 16px/1.8 system-ui, sans-serif; color: #555; padding: 48px 24px; text-align: center">
+        页面加载中…<br />
+        <small>如果一直停留在这里：按 <b>Ctrl + F5</b> 强制刷新；仍不行请换用无痕窗口或 Edge / Chrome 打开，并确认竞标程序窗口仍在运行。</small>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

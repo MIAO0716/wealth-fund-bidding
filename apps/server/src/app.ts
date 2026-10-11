@@ -141,10 +141,18 @@ export async function buildApp(config: AppConfig, opts: { db?: Db; logger?: bool
   // 生产：同域托管前端构建产物（SPA 回退到 index.html）
   const webDist = config.webDist ? resolve(config.webDist) : '';
   if (webDist && existsSync(join(webDist, 'index.html'))) {
-    await app.register(fastifyStatic, { root: webDist, wildcard: false });
+    await app.register(fastifyStatic, {
+      root: webDist,
+      wildcard: false,
+      // 带哈希的构建产物可长期缓存；页面本身每次都向服务器确认，升级后不会继续用旧页面去加载已不存在的脚本
+      setHeaders: (reply, path) => {
+        reply.header('Cache-Control', /[\\/]assets[\\/]/.test(path) ? 'public, max-age=31536000, immutable' : 'no-cache');
+      },
+    });
     app.setNotFoundHandler((req, reply) => {
-      if (req.url.startsWith('/api/') || req.method !== 'GET') {
-        return reply.status(404).send({ error: { code: 'NOT_FOUND', message: '接口不存在' } });
+      // 接口与缺失的构建产物返回 404（不能回退成页面：浏览器会把 HTML 当脚本加载失败，管理端一片空白）
+      if (req.url.startsWith('/api/') || req.url.startsWith('/assets/') || req.method !== 'GET') {
+        return reply.status(404).send({ error: { code: 'NOT_FOUND', message: req.url.startsWith('/api/') ? '接口不存在' : '文件不存在' } });
       }
       return reply.type('text/html').sendFile('index.html');
     });

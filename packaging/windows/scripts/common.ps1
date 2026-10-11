@@ -245,11 +245,22 @@ function Read-NewPassword([string]$prompt) {
   }
 }
 
+# 在独立的隐藏窗口中运行 node 脚本并等待，返回退出码。
+# node 不与本窗口共用控制台：直接在本窗口运行时，Windows Terminal 会把附近几行中文重复显示（如「检检查查」）。
+function Invoke-NodeScript([string]$script, [string[]]$scriptArgs, [string]$logName) {
+  $argList = @("`"$(Join-Path $AppDir "apps\server\dist\$script")`"") + @($scriptArgs | ForEach-Object { "`"$_`"" })
+  $p = Start-Process -FilePath $NodeExe -ArgumentList $argList -WindowStyle Hidden -PassThru `
+    -RedirectStandardOutput (Join-Path $LogDir "$logName.log") -RedirectStandardError (Join-Path $LogDir "$logName.err.log")
+  $null = $p.Handle
+  $p.WaitForExit()
+  return $p.ExitCode
+}
+
 function Set-AdminPassword([string]$password) {
   $env:ADMIN_PASSWORD = $password
   try {
-    & $NodeExe (Join-Path $AppDir 'apps\server\dist\admin-create.js') --username admin --name '工作人员' *> (Join-Path $LogDir 'admin-create.log')
-    if ($LASTEXITCODE -ne 0) { Stop-WithError "设置管理员密码失败，详见 $LogDir\admin-create.log" }
+    $code = Invoke-NodeScript 'admin-create.js' @('--username', 'admin', '--name', '工作人员') 'admin-create'
+    if ($code -ne 0) { Stop-WithError "设置管理员密码失败，详见 $LogDir\admin-create.err.log" }
   } finally {
     Remove-Item Env:\ADMIN_PASSWORD -ErrorAction SilentlyContinue
   }
