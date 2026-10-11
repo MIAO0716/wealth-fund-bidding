@@ -4,6 +4,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api, errorText } from '../lib/api';
 import { fmtTime } from '../lib/format';
 
@@ -50,7 +51,26 @@ export function KdocsReadBar({ eventId, compact = false, onRead }: { eventId: st
     return () => clearInterval(t);
   }, [eventId]);
 
-  if (!brief?.binding?.enabled) return null;
+  if (!brief) return null;
+  if (!brief.binding?.enabled) {
+    // 尚未连接 / 已停用：在同一位置提示去哪里连接（只用手机扫码竞标时可忽略）
+    if (!compact) return null;
+    return (
+      <div className="kd-read off">
+        <button className="btn" disabled title="连接金山文档后可用">
+          读取金山表格
+        </button>
+        <div className="kd-read-info">
+          <span className="muted">
+            {brief.binding ? '金山文档读取已停用。' : '尚未连接金山文档。'}
+            如需让领导在金山文档中填写，请到
+            <Link to={`/admin/events/${eventId}/kdocs`}>「金山文档」页</Link>
+            {brief.binding ? '启用读取' : '一键连接'}；只用手机扫码竞标可忽略。
+          </span>
+        </div>
+      </div>
+    );
+  }
   const st = brief.status;
 
   const read = async () => {

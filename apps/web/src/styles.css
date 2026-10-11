@@ -1689,3 +1689,12 @@ textarea {
   gap: 2px;
   font-size: 14px;
 }
+.kd-read.off {
+  border-left-color: var(--line);
+  background: transparent;
+  padding: 6px 12px;
+}
+.kd-read.off .btn {
+  font-size: 14px;
+  padding: 6px 12px;
+}
