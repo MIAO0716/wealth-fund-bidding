@@ -19,7 +19,7 @@ export const AIRSCRIPT_SOURCE = `/**
  * 两种用法：
  *   - 一个文件 16 张工作表：脚本放在这个文件里；
  *   - 每家单位一个文件（推荐，各单位互相看不到）：脚本放在只有工作人员能打开的「总控」文件里，
- *     通过 KSDrive.openFile 打开各单位文件读写（需在脚本编辑器的「服务」中添加「云文档」）。
+ *     通过 KSDrive.openFile 打开各单位文件读写（需在脚本编辑器的「服务」中添加「云文档API」）。
  * 用法见《金山文档接入说明》。请整体粘贴，不要修改；更新时从管理端重新下载并整体替换。
  */
 var PROTOCOL = 1;
@@ -84,7 +84,7 @@ function main(argv) {
       opened.push(f);
       books[key] = { app: f.Application, names: listSheetNames(f.Application), error: null };
     } catch (e) {
-      books[key] = { app: null, names: [], error: '无法打开文件（请确认链接正确、脚本所有者有权限，且已在「服务」中添加云文档）：' + e };
+      books[key] = { app: null, names: [], error: '无法打开文件（请确认链接正确、脚本所有者有权限，且已在「服务」中添加云文档API）：' + e };
     }
     return books[key];
   }

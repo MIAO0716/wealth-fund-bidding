@@ -225,7 +225,7 @@ export function KdocsTab({ eventId }: TabProps) {
                   下载<a href={`${base}/template-files.zip`}>模板压缩包</a>并解压：1 个「竞标总控」+ 16 个单位文件。在金山文档网页版把 17 个文件一起「导入」（不要改工作表名称）。
                 </li>
                 <li>
-                  打开「竞标总控」→ AirScript 脚本编辑器（一般在「效率」→「高级开发」），新建共享脚本，粘贴<a href="/api/v1/admin/kdocs/airscript.js">同步脚本</a>全文，保存；在编辑器的「服务」中添加「云文档」。
+                  打开「竞标总控」→ AirScript 脚本编辑器（一般在「效率」→「高级开发」），新建共享脚本，粘贴<a href="/api/v1/admin/kdocs/airscript.js">同步脚本</a>全文，保存；在编辑器的「服务」中添加「云文档API」。
                 </li>
                 <li>在脚本编辑器中生成「脚本令牌」；在脚本的「…」菜单中「复制 webhook 链接」。</li>
                 <li>逐个复制 16 个单位文件的分享链接，按「单位名称 链接」每行一家，粘贴到下面的清单里。</li>
