@@ -3,11 +3,13 @@
  * 管理端（1440×900）、大屏（1920×1080）、浦东/闵行/黄浦三部手机（390×844），各自独立的浏览器上下文与 Cookie。
  */
 import { mkdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { type Browser, type BrowserContext, type Page, expect, test } from '@playwright/test';
 
-const SHOTS = 'docs/screenshots';
-mkdirSync(`../../${SHOTS}`, { recursive: true });
-const shot = (page: Page, name: string) => page.screenshot({ path: `../../${SHOTS}/${name}.png` });
+// 截图保存到仓库 docs/screenshots（与运行目录无关）
+const SHOTS = fileURLToPath(new URL('../../docs/screenshots', import.meta.url));
+mkdirSync(SHOTS, { recursive: true });
+const shot = (page: Page, name: string) => page.screenshot({ path: `${SHOTS}/${name}.png` });
 
 const PHONE = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 };
 
@@ -79,7 +81,7 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await expect(admin.locator('.modal .leader-card')).toHaveCount(16);
   await expect(admin.locator('.modal .leader-card').first()).toContainText('打开微信「扫一扫」');
   await expect(admin.locator('.modal .leader-card').first()).toContainText('Meeting-5G');
-  await admin.locator('.modal .leader-card').first().screenshot({ path: `../../${SHOTS}/leader-card.png` });
+  await admin.locator('.modal .leader-card').first().screenshot({ path: `${SHOTS}/leader-card.png` });
   await admin.getByRole('button', { name: '关闭（二维码不再显示）' }).click();
 
   // 大屏链接与二维码

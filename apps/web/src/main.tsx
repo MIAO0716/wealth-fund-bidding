@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AdminApp } from './pages/admin/AdminApp';
 import { BidPage } from './pages/Bid';
 import { JoinPage } from './pages/Join';
+import { MockKdocsPage } from './pages/MockKdocs';
 import { ScreenPage } from './pages/screen/ScreenPage';
 import './styles.css';
 
@@ -17,6 +18,7 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/screen/first-round" element={<ScreenPage mode="FIRST_ROUND" />} />
         <Route path="/screen/live" element={<ScreenPage mode="LIVE" />} />
         <Route path="/screen/results" element={<ScreenPage mode="RESULTS" />} />
+        <Route path="/mock-kdocs" element={<MockKdocsPage />} />
         <Route path="/admin/*" element={<AdminApp />} />
         <Route path="*" element={<Navigate to="/admin" replace />} />
       </Routes>

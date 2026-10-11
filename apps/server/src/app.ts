@@ -9,11 +9,15 @@ import { type Db, createPool } from './db/pool';
 import { BizError, bizError } from './lib/errors';
 import { registerAdminRoutes } from './routes/admin';
 import { registerAuthRoutes } from './routes/auth';
+import { registerKdocsAdminRoutes, registerKdocsMockApi, registerKdocsMockRoutes } from './routes/kdocs';
 import { registerBidderRoutes } from './routes/bidder';
 import { registerScreenRoutes } from './routes/screen';
 import { COOKIE_NAMES, type Role, type SessionInfo, getSession } from './services/auth';
 import { makeCheckpointer } from './services/backup';
 import type { AppContext } from './services/context';
+import type { KdocsDeps } from './services/kdocs/admin';
+import { KdocsMock } from './services/kdocs/mock';
+import { KdocsSyncManager } from './services/kdocs/sync';
 import { RealtimeHub } from './services/realtime';
 
 declare module 'fastify' {
@@ -27,11 +31,13 @@ export interface BuiltApp {
   ctx: AppContext;
   hub: RealtimeHub;
   db: Db;
+  kdocs: KdocsDeps;
 }
 
 export interface AppDeps {
   ctx: AppContext;
   hub: RealtimeHub;
+  kdocs: KdocsDeps;
   requireRole: (role: Role) => (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
   cookieOptions: (expiresAt: Date) => { httpOnly: true; sameSite: 'lax'; secure: boolean; path: string; expires: Date };
 }
@@ -53,6 +59,7 @@ export async function buildApp(config: AppConfig, opts: { db?: Db; logger?: bool
   const log = (msg: string, err?: unknown) => (err ? app.log.error({ err }, msg) : app.log.info(msg));
   const ctx: AppContext = { db, config, log, onCheckpoint: makeCheckpointer(config, db, log) };
   const hub = new RealtimeHub(db, config.databaseUrl, log);
+  const kdocs: KdocsDeps = { ctx, sync: new KdocsSyncManager(ctx, log), mock: config.kdocsMock ? new KdocsMock() : null };
 
   await app.register(cookie);
   await app.register(multipart, { limits: { fileSize: 2 * 1024 * 1024, files: 1 } });
@@ -107,7 +114,7 @@ export async function buildApp(config: AppConfig, opts: { db?: Db; logger?: bool
     expires: expiresAt,
   });
 
-  const deps: AppDeps = { ctx, hub, requireRole, cookieOptions };
+  const deps: AppDeps = { ctx, hub, kdocs, requireRole, cookieOptions };
 
   app.get('/healthz', async (_req, reply) => {
     try {
@@ -124,9 +131,12 @@ export async function buildApp(config: AppConfig, opts: { db?: Db; logger?: bool
       registerAdminRoutes(api, deps);
       registerBidderRoutes(api, deps);
       registerScreenRoutes(api, deps);
+      registerKdocsAdminRoutes(api, deps);
+      registerKdocsMockApi(api, deps);
     },
     { prefix: '/api/v1' },
   );
+  registerKdocsMockRoutes(app, deps);
 
   // 生产：同域托管前端构建产物（SPA 回退到 index.html）
   const webDist = config.webDist ? resolve(config.webDist) : '';
@@ -143,9 +153,10 @@ export async function buildApp(config: AppConfig, opts: { db?: Db; logger?: bool
   }
 
   app.addHook('onClose', async () => {
+    kdocs.sync.stop();
     await hub.stop();
     if (!opts.db) await db.end();
   });
 
-  return { app, ctx, hub, db };
+  return { app, ctx, hub, db, kdocs };
 }

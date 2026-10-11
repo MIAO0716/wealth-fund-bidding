@@ -101,7 +101,7 @@ export interface BidFeedItem {
   projectCode: ProjectCode;
   fromPp: number;
   toPp: number;
-  source: 'LEADER' | 'ADMIN_PROXY';
+  source: 'LEADER' | 'ADMIN_PROXY' | 'KDOCS';
   acceptedAt: string;
   eventSequence: number;
 }
@@ -120,7 +120,7 @@ export interface BidReceipt {
   bidVersion: number;
   eventSequence: number;
   acceptedAt: string;
-  source: 'LEADER' | 'ADMIN_PROXY';
+  source: 'LEADER' | 'ADMIN_PROXY' | 'KDOCS';
 }
 
 export interface FirstRoundRow {

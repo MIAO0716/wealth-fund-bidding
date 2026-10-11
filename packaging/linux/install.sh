@@ -144,6 +144,8 @@ MIGRATIONS_DIR=$APP_ROOT/current/app/apps/server/migrations
 BACKUP_DIR=$BACKUP_DIR
 PG_DUMP_PATH=/usr/bin/pg_dump
 READ_ONLY=${READ_ONLY:-false}
+# 模拟金山文档仅用于局域网演练，互联网部署关闭
+KDOCS_MOCK=false
 LOG_LEVEL=info
 NODE_ENV=production
 EOF

@@ -49,6 +49,9 @@ const ACTION_LABEL: Record<string, string> = {
   SCREEN_MODE: '切换大屏',
   DEMO_SEEDED: '填充演示数据',
   EXPORT: '导出',
+  KDOCS_SYNC_ON: '开启金山文档同步',
+  KDOCS_SYNC_OFF: '停止金山文档同步',
+  KDOCS_LAYOUT: '初始化金山表格',
 };
 
 export function MonitorTab({ eventId, state }: TabProps) {

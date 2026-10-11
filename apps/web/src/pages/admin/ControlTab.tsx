@@ -23,13 +23,14 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
     setBusy(true);
     setMsg(null);
     try {
-      await api.post(`${base}/projects/${project}/control`, {
+      const r = await api.post<{ kdocsWarning?: string }>(`${base}/projects/${project}/control`, {
         action,
         expectedControlVersion: p.controlVersion,
         idempotencyKey: newIdempotencyKey('ctl'),
         ...extra,
       });
-      setMsg({ ok: true, text: '操作成功' });
+      // 金山文档最后一次读取失败：操作已执行，但提醒核对表格
+      setMsg(r.kdocsWarning ? { ok: false, text: `操作成功。注意：${r.kdocsWarning}` } : { ok: true, text: '操作成功' });
       reload();
     } catch (e) {
       setMsg({ ok: false, text: errorText(e) });
@@ -226,7 +227,7 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
                             {r.unitName}
                             <div className="small">
                               {a?.acknowledged ? (
-                                <span className="chip green">已认领{a.source === 'ADMIN_PROXY' ? '·代记' : ''}</span>
+                                <span className="chip green">已认领{a.source === 'ADMIN_PROXY' ? '·代记' : a.source === 'KDOCS' ? '·金山' : ''}</span>
                               ) : (
                                 <span className="chip grey">未认领</span>
                               )}
@@ -287,7 +288,7 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
                 <td className="num">
                   {b.fromPp}% → <b>{b.toPp}%</b>
                 </td>
-                <td>{b.source === 'ADMIN_PROXY' ? <span className="chip gold">代录</span> : <span className="chip">领导</span>}</td>
+                <td>{b.source === 'ADMIN_PROXY' ? <span className="chip gold">代录</span> : b.source === 'KDOCS' ? <span className="chip">金山文档</span> : <span className="chip">领导</span>}</td>
                 <td className="small muted">{fmtTime(b.acceptedAt)}</td>
               </tr>
             ))}

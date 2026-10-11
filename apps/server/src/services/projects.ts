@@ -491,10 +491,13 @@ export async function acknowledgeBase(
   projectCodeRaw: unknown,
   unitCode: string,
   input: { idempotencyKey?: unknown; reason?: unknown },
+  /** 内部调用渠道（不来自请求体）：金山文档同步 */
+  opts: { channel?: 'KDOCS' } = {},
 ) {
   const projectCode = parseProject(projectCodeRaw);
   const reason = typeof input.reason === 'string' ? input.reason.trim() : '';
   const proxy = actor.type === 'ADMIN';
+  const source = opts.channel ?? (proxy ? 'ADMIN_PROXY' : 'LEADER');
   if (proxy && !reason) throw bizError('REASON_REQUIRED', '代记底标确认须注明原因');
   return runWrite(
     ctx,
@@ -533,14 +536,14 @@ export async function acknowledgeBase(
       await tx.query(
         `UPDATE bid_states SET base_ack_at = $4, base_ack_source = $5, base_ack_actor = $6, base_ack_reason = $7, updated_at = now()
           WHERE event_id = $1 AND project_code = $2 AND unit_code = $3`,
-        [eventId, projectCode, unitCode, now, proxy ? 'ADMIN_PROXY' : 'LEADER', actor.name, reason || null],
+        [eventId, projectCode, unitCode, now, source, actor.name, reason || null],
       );
       const seq = await emit(tx, eventId, {
         type: 'BASE_ACKNOWLEDGED',
         audience: 'UNIT',
         projectCode,
         unitCode,
-        data: { acknowledgedAt: now.toISOString(), source: proxy ? 'ADMIN_PROXY' : 'LEADER' },
+        data: { acknowledgedAt: now.toISOString(), source },
       });
       await audit(tx, eventId, actor, proxy ? 'BASE_ACK_PROXY' : 'BASE_ACK', {
         projectCode,
@@ -555,7 +558,7 @@ export async function acknowledgeBase(
           unitCode,
           baseTargetWan,
           acknowledgedAt: now.toISOString(),
-          source: proxy ? 'ADMIN_PROXY' : 'LEADER',
+          source,
           alreadyAcknowledged: false,
         },
       };

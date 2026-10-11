@@ -166,8 +166,12 @@ export function registerAdminRoutes(api: FastifyInstance, deps: AppDeps): void {
   // ------------------------------------------------------------ 现场控制
 
   api.post<{ Params: P }>('/admin/events/:eventId/projects/:projectCode/control', auth, async (req) => {
+    // 结束本组、暂停、锁定前：先把金山文档中最后几秒的填写读进来
+    const action = body(req).action;
+    const kdocsWarning =
+      action === 'CLOSE_GROUP' || action === 'PAUSE' || action === 'LOCK' ? await deps.kdocs.sync.flush(req.params.eventId) : null;
     const r = await controlProject(ctx, req.params.eventId, actor(req), req.params.projectCode, body(req));
-    return { ...r.body, replayed: r.replayed };
+    return { ...r.body, replayed: r.replayed, ...(kdocsWarning ? { kdocsWarning } : {}) };
   });
 
   api.get<{ Params: P }>('/admin/events/:eventId/projects/:projectCode/lock-preview', auth, async (req) =>

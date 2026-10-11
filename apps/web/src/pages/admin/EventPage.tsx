@@ -17,6 +17,7 @@ import { AccessTab } from './AccessTab';
 import { ControlTab } from './ControlTab';
 import { ExportTab } from './ExportTab';
 import { FirstRoundTab } from './FirstRoundTab';
+import { KdocsTab } from './KdocsTab';
 import { MonitorTab } from './MonitorTab';
 
 export interface AdminState {
@@ -67,6 +68,7 @@ export function EventPage({ me }: { me: AdminInfo }) {
           ['first-round', '首轮数据'],
           ['control', '现场控制'],
           ['access', '二维码与大屏'],
+          ['kdocs', '金山文档'],
           ['monitor', '监控与审计'],
           ['export', '导出与备份'],
         ].map(([path, label]) => (
@@ -81,6 +83,7 @@ export function EventPage({ me }: { me: AdminInfo }) {
         <Route path="first-round" element={<FirstRoundTab {...props} />} />
         <Route path="control" element={<ControlTab {...props} />} />
         <Route path="access" element={<AccessTab {...props} />} />
+        <Route path="kdocs" element={<KdocsTab {...props} />} />
         <Route path="monitor" element={<MonitorTab {...props} />} />
         <Route path="export" element={<ExportTab {...props} />} />
       </Routes>

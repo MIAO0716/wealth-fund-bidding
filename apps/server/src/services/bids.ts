@@ -39,11 +39,14 @@ export async function submitBid(
   projectCodeRaw: unknown,
   unitCode: string,
   input: BidInput,
+  /** 内部调用渠道（不来自请求体）：金山文档同步 */
+  opts: { channel?: 'KDOCS' } = {},
 ) {
   const projectCode = parseProject(projectCodeRaw);
   const unit = UNIT_BY_CODE.get(unitCode);
   if (!unit) throw bizError('NOT_FOUND', '单位不存在');
   const proxy = actor.type === 'ADMIN';
+  const source = opts.channel ?? (proxy ? 'ADMIN_PROXY' : 'LEADER');
   const reason = typeof input.reason === 'string' ? input.reason.trim() : '';
   if (proxy && !reason) throw bizError('REASON_REQUIRED', '代录加码必须填写代录原因');
   if (typeof input.expectedBidVersion !== 'number' || !Number.isInteger(input.expectedBidVersion)) {
@@ -131,7 +134,7 @@ export async function submitBid(
           fromPp: state.current_pp,
           toPp,
           bidVersion: newVersion,
-          source: proxy ? 'ADMIN_PROXY' : 'LEADER',
+          source,
           acceptedAt: acceptedAt.toISOString(),
         },
       });
@@ -149,7 +152,7 @@ export async function submitBid(
         bidVersion: newVersion,
         eventSequence: seq,
         acceptedAt: acceptedAt.toISOString(),
-        source: proxy ? 'ADMIN_PROXY' : 'LEADER',
+        source,
       };
       await tx.query(
         `INSERT INTO bid_records (id, receipt_no, event_id, project_code, unit_code, from_pp, to_pp, delta_pp, base_target_fen, target_fen,
@@ -180,7 +183,7 @@ export async function submitBid(
         projectCode,
         unitCode,
         reason: reason || null,
-        details: { receiptNo: receipt.receiptNo, fromPp: state.current_pp, toPp },
+        details: { receiptNo: receipt.receiptNo, fromPp: state.current_pp, toPp, channel: source },
         eventSequence: seq,
       });
       return { statusCode: 201, body: receipt };

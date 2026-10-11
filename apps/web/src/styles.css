@@ -1475,3 +1475,137 @@ textarea {
 .s-groups.focus .s-group.dim .s-current {
   font-size: 34px;
 }
+
+/* ---------------------------------------------------------------- 模拟金山文档（演练用） */
+.mk-page {
+  min-height: 100vh;
+  background: #f5f6f8;
+  color: #1f2329;
+}
+.mk-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: #fff;
+  border-bottom: 1px solid #e5e6eb;
+  flex-wrap: wrap;
+}
+.mk-logo {
+  font-weight: 700;
+  color: #fff;
+  background: #2b7cf6;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 13px;
+}
+.mk-title {
+  font-weight: 600;
+}
+.mk-badge {
+  font-size: 12px;
+  color: var(--amber);
+  background: #fff7e6;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+.mk-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 8px 16px 0;
+  background: #fff;
+  border-bottom: 1px solid #e5e6eb;
+}
+.mk-tab {
+  border: 1px solid #e5e6eb;
+  border-bottom: none;
+  background: #f5f6f8;
+  border-radius: 6px 6px 0 0;
+  padding: 6px 12px;
+  white-space: nowrap;
+  font-size: 14px;
+}
+.mk-tab.on {
+  background: #fff;
+  color: #2b7cf6;
+  font-weight: 600;
+}
+.mk-scroll {
+  overflow-x: auto;
+  padding: 12px 16px;
+}
+.mk-grid {
+  border-collapse: collapse;
+  background: #fff;
+  font-size: 14px;
+  width: 100%;
+  min-width: 560px;
+  table-layout: fixed;
+}
+.mk-grid th,
+.mk-grid td {
+  border: 1px solid #e5e6eb;
+  padding: 4px 6px;
+  height: 30px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mk-grid th {
+  background: #f2f3f5;
+  color: #646a73;
+  font-weight: 500;
+}
+.mk-grid th:nth-child(2) {
+  width: 22%;
+}
+.mk-grid th:nth-child(3) {
+  width: 15%;
+}
+.mk-grid th:nth-child(4) {
+  width: 11%;
+}
+.mk-grid th:nth-child(5) {
+  width: 38%;
+}
+.mk-rh {
+  width: 34px;
+  background: #f2f3f5;
+  color: #8f959e;
+  text-align: center;
+  font-size: 12px;
+}
+.mk-head td:not(.mk-rh) {
+  background: var(--red);
+  color: #fff;
+  font-weight: 600;
+}
+.mk-ack td:not(.mk-rh) {
+  background: #fff8ee;
+}
+.mk-edit {
+  background: #fff7d6;
+  padding: 0 !important;
+}
+.mk-edit input,
+.mk-edit select {
+  width: 100%;
+  height: 30px;
+  border: none;
+  background: transparent;
+  font: inherit;
+  padding: 0 6px;
+}
+.mk-ro.ok {
+  color: var(--ok);
+  white-space: normal;
+}
+.mk-ro.bad {
+  color: var(--red);
+  white-space: normal;
+}
+.mk-foot {
+  color: #8f959e;
+  font-size: 12px;
+  padding: 0 16px 24px;
+}

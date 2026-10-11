@@ -286,7 +286,7 @@ function BidMain({ eventId }: { eventId: string }) {
               {p.baseAcknowledged ? (
                 <span className="chip green">
                   已确认认领底标 {fmtTime(p.baseAcknowledgedAt)}
-                  {p.baseAckSource === 'ADMIN_PROXY' ? '（工作人员代记）' : ''}
+                  {p.baseAckSource === 'ADMIN_PROXY' ? '（工作人员代记）' : p.baseAckSource === 'KDOCS' ? '（金山文档）' : ''}
                 </span>
               ) : (
                 p.status !== 'LOCKED' && (
@@ -391,7 +391,7 @@ function BidMain({ eventId }: { eventId: string }) {
                 <div className="m-history-row" key={b.receiptNo}>
                   <span className="num">
                     {b.fromPp}% → <b>{b.toPp}%</b>
-                    {b.source === 'ADMIN_PROXY' ? '（代录）' : ''}
+                    {b.source === 'ADMIN_PROXY' ? '（代录）' : b.source === 'KDOCS' ? '（金山文档）' : ''}
                   </span>
                   <span className="num">{fmtTime(b.acceptedAt)}</span>
                 </div>

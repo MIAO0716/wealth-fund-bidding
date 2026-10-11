@@ -21,6 +21,8 @@ export interface AppConfig {
   webDist: string;
   logLevel: string;
   adminSessionHours: number;
+  /** 模拟金山文档（演练用，云服务器部署时关闭） */
+  kdocsMock: boolean;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -40,5 +42,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     webDist: env.WEB_DIST ?? '',
     logLevel: env.LOG_LEVEL ?? 'info',
     adminSessionHours: Number(env.ADMIN_SESSION_HOURS ?? 12),
+    kdocsMock: bool(env.KDOCS_MOCK, true),
   };
 }

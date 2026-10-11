@@ -148,7 +148,7 @@ export async function collectExport(tx: Tx, eventId: string): Promise<ExportData
     deltaPp: b.delta_pp,
     target: wanNum(b.target_fen),
     at: formatShanghai(b.accepted_at),
-    source: b.source === 'ADMIN_PROXY' ? '工作人员代录' : '领导提交',
+    source: b.source === 'ADMIN_PROXY' ? '工作人员代录' : b.source === 'KDOCS' ? '领导提交（金山文档）' : '领导提交',
     reason: b.reason ?? '',
   }));
 
