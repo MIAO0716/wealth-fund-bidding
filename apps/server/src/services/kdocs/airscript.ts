@@ -9,7 +9,7 @@
  * 语法保持 ES5（var / function），不依赖新语法。
  */
 
-export const AIRSCRIPT_VERSION = '1.1.0';
+export const AIRSCRIPT_VERSION = '1.1.1';
 
 export const AIRSCRIPT_SOURCE = `/**
  * 理财、基金现场竞标 · 金山文档同步脚本 v${AIRSCRIPT_VERSION}（协议 1）
@@ -47,6 +47,22 @@ function isSingleCell(values) {
   return values.length === 1 && Array.isArray(values[0]) && values[0].length === 1;
 }
 
+function selfCheck(result) {
+  result.selfCheck = true;
+  console.log('自检：脚本可以运行（版本 ' + SCRIPT_VERSION + '），本文件工作表：' + listSheetNames(Application).join('、'));
+  try {
+    var t = typeof KSDrive.openFile;
+    console.log('自检：「云文档API」服务可用（' + t + '）。可以回到竞标程序点「一键连接」。');
+    result.cloudDocs = true;
+  } catch (e) {
+    result.ok = false;
+    result.cloudDocs = false;
+    console.log('自检：「云文档API」服务不可用：' + e);
+    console.log('请在左侧「服务」中添加「云文档API」，点工具栏的保存，再点运行；如弹出授权请允许。只用「一个文件 16 张工作表」时可忽略。');
+  }
+  return result;
+}
+
 function main(argv) {
   var result = {
     protocol: PROTOCOL,
@@ -59,7 +75,9 @@ function main(argv) {
     written: 0,
     errors: []
   };
-  if (!argv || argv.protocol !== PROTOCOL) {
+  // 在脚本编辑器里直接点「运行」（没有参数）：自检，检查脚本与「云文档API」服务是否可用
+  if (!argv || argv.protocol === undefined) return selfCheck(result);
+  if (argv.protocol !== PROTOCOL) {
     result.ok = false;
     result.errors.push('协议版本不匹配，请从管理端重新下载脚本并整体替换');
     return result;

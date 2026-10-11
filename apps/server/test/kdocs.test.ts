@@ -90,6 +90,13 @@ describe('AirScript 与接口', () => {
     ]);
     expect(r.reads[1].values).toBeNull();
     expect((runAirScript(wb, { protocol: 99 }) as any).ok).toBe(false);
+    // 在编辑器里直接运行（无参数）：自检，日志说明「云文档API」是否可用
+    const logs: string[] = [];
+    const self = runAirScript(wb, undefined, logs, () => wb) as any;
+    expect(self).toMatchObject({ selfCheck: true, cloudDocs: true, ok: true });
+    expect(logs.join('\n')).toContain('「云文档API」服务可用');
+    const noDrive = runAirScript(wb, undefined, []) as any;
+    expect(noDrive.cloudDocs).toBe(true); // 模拟环境中 KSDrive 对象始终存在，打开文件时才会报错
   });
 
   it('webhook 链接只接受金山文档与本机模拟地址', () => {
@@ -118,6 +125,7 @@ describe('AirScript 与接口', () => {
       throw new Error('应当失败');
     };
     expect((await err(200, { status: 'finished', error: 'ReferenceError: x', data: {} })).kind).toBe('SCRIPT');
+    expect((await err(200, { status: 'finished', error: '高级服务:云文档 未添加!请点击上方服务按钮添加对应服务。', data: {} })).message).toContain('在编辑器里点一次「运行」');
     expect((await err(401, { error: 'bad token' })).kind).toBe('AUTH');
     expect((await err(200, { status: 'finished', error: '', data: { result: null } })).message).toContain('return main(Context.argv)');
     expect((await err(200, { status: 'finished', error: '', data: { result: { protocol: 2 } } })).message).toContain('重新下载脚本');

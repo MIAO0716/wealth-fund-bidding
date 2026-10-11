@@ -91,7 +91,16 @@ export async function callScript(
   if (status === 429) throw new KdocsError('调用过于频繁，金山文档暂时限流（可适当调大同步间隔）', 'HTTP', status);
   if (status < 200 || status >= 300) throw new KdocsError(errMsg || `金山文档返回 HTTP ${status}`, 'HTTP', status);
   if (!body) throw new KdocsError('金山文档返回内容无法解析', 'PROTOCOL', status);
-  if (errMsg) throw new KdocsError(`脚本运行出错：${errMsg}`, 'SCRIPT', status);
+  if (errMsg) {
+    if (/云文档/.test(errMsg) && /未添加|未授权|无权限/.test(errMsg)) {
+      throw new KdocsError(
+        `脚本运行出错：${errMsg}。处理：在脚本编辑器左侧「服务」中确认已添加「云文档API」→ 点工具栏的「保存」→ 在编辑器里点一次「运行」（如弹出授权请允许，日志应显示「云文档API服务可用」）→ 再点「一键连接」。若仍不行，可先改用「一个文件 16 张工作表」`,
+        'SCRIPT',
+        status,
+      );
+    }
+    throw new KdocsError(`脚本运行出错：${errMsg}`, 'SCRIPT', status);
+  }
 
   let result = body.data?.result;
   if (typeof result === 'string') {
