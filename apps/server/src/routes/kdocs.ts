@@ -5,7 +5,7 @@ import { actorOf } from '../services/auth';
 import { getEventRow } from '../services/events';
 import { connectKdocs, getKdocsOverview, initKdocsLayout, saveKdocsBinding, testKdocs, useKdocsMock } from '../services/kdocs/admin';
 import { AIRSCRIPT_SOURCE } from '../services/kdocs/airscript';
-import { buildKdocsTemplate } from '../services/kdocs/template';
+import { buildKdocsTemplate, buildKdocsTemplateZip } from '../services/kdocs/template';
 
 type P = { eventId: string };
 const body = (req: FastifyRequest) => (req.body ?? {}) as Record<string, unknown>;
@@ -48,7 +48,7 @@ export function registerKdocsAdminRoutes(api: FastifyInstance, deps: AppDeps): v
   api.post<{ Params: P }>('/admin/events/:eventId/kdocs/use-mock', auth, async (req) => {
     const addr = req.server.server.address();
     const port = typeof addr === 'object' && addr ? addr.port : ctx.config.port;
-    return useKdocsMock(kdocs, req.params.eventId, actor(req), port);
+    return useKdocsMock(kdocs, req.params.eventId, actor(req), port, body(req).mode);
   });
 
   api.get<{ Params: P }>('/admin/events/:eventId/kdocs/template.xlsx', auth, async (req, reply) => {
@@ -58,6 +58,16 @@ export function registerKdocsAdminRoutes(api: FastifyInstance, deps: AppDeps): v
     return reply
       .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
       .header('Content-Disposition', attachment('kdocs-template.xlsx', '金山文档填报表模板.xlsx'))
+      .send(buf);
+  });
+
+  api.get<{ Params: P }>('/admin/events/:eventId/kdocs/template-files.zip', auth, async (req, reply) => {
+    const ev = await getEventRow(ctx.db, req.params.eventId);
+    const b = await kdocs.sync.binding(req.params.eventId);
+    const buf = await buildKdocsTemplateZip({ title: String((ev.config as { name?: string }).name || '理财、基金现场竞标'), maxRows: b?.max_rows ?? 40 });
+    return reply
+      .header('Content-Type', 'application/zip')
+      .header('Content-Disposition', attachment('kdocs-unit-files.zip', '金山文档填报表-每家单位一个文件.zip'))
       .send(buf);
   });
 

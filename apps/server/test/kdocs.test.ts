@@ -43,8 +43,16 @@ async function syncNow(eventId: string) {
   return r.body;
 }
 
-const cell = (fileId: string, sheet: string, addr: string) => mock().file(fileId)!.sheet(sheet)!.read(addr)[0][0];
-const edit = (fileId: string, sheet: string, addr: string, value: unknown) => mock().editCell(fileId, sheet, addr, value);
+/** 单位工作表所在的模拟文件：一个文件模式在总控文件里；每家一个文件模式在「编号-单位代码」文件里 */
+const fileOf = (fileId: string, sheet: string) => {
+  if (mock().file(fileId)?.sheet(sheet)) return fileId;
+  const code = UNITS.find((u) => u.name === sheet)!.code;
+  return `${fileId.replace(/hub$/, '')}-${code}`;
+};
+const cell = (fileId: string, sheet: string, addr: string) => mock().file(fileOf(fileId, sheet))!.sheet(sheet)!.read(addr)[0][0];
+const edit = (fileId: string, sheet: string, addr: string, value: unknown) => mock().editCell(fileOf(fileId, sheet), sheet, addr, value);
+/** 从概览中取出「单位 链接」清单文本 */
+const filesText = (o: any) => (o.binding.unitFiles ?? []).map((f: any) => `${f.unitName} ${f.url}`).join('\n');
 
 /** 领导确认认领底标（发布后程序先清空 B11 并提示，之后选「确认」才有效） */
 async function ackViaDoc(eventId: string, fileId: string, unitName: string) {
@@ -143,6 +151,11 @@ describe('配置与表格初始化', () => {
     await wb.xlsx.load(res.rawPayload as unknown as ArrayBuffer);
     expect(wb.worksheets.map((w) => w.name)).toEqual(['使用说明', ...UNITS.map((u) => u.name)]);
     expect(wb.getWorksheet('浦东')!.getCell('C13').dataValidation?.formulae).toEqual(['"确认"']);
+    const zip = await ctx.app.inject({ method: 'GET', url: api(eventId, '/template-files.zip'), headers: { cookie: ctx.adminCookie } });
+    expect(zip.statusCode).toBe(200);
+    expect(zip.rawPayload.subarray(0, 4).toString('hex')).toBe('504b0304');
+    expect(zip.rawPayload.includes(Buffer.from('01-浦东.xlsx'))).toBe(true);
+    expect(zip.rawPayload.includes(Buffer.from('00-竞标总控（只给工作人员）.xlsx'))).toBe(true);
     const script = await ctx.app.inject({ method: 'GET', url: '/api/v1/admin/kdocs/airscript.js', headers: { cookie: ctx.adminCookie } });
     expect(script.body).toContain('return main(Context.argv);');
   });
@@ -321,10 +334,10 @@ describe('一键连接', () => {
 
   it('粘贴链接和令牌一键完成：保存 → 测试连接 → 写入版式 → 开启同步', async () => {
     const { eventId: a, fileId } = await prepared({ enable: false });
-    const url = (await call(ctx.app, 'GET', api(a), { cookie: ctx.adminCookie })).body.binding.webhookUrl;
-    // 新活动直接粘贴同一个链接和令牌
+    const oa = (await call(ctx.app, 'GET', api(a), { cookie: ctx.adminCookie })).body;
+    // 新活动直接粘贴同一个链接、令牌和 16 家单位文件链接
     const b = await createFormalEvent(ctx, { ...FULL, name: '一键连接测试' });
-    const r = await connect(b, { webhookUrl: url, token: mock().token });
+    const r = await connect(b, { webhookUrl: oa.binding.webhookUrl, token: mock().token, unitFiles: filesText(oa) });
     expect(r.status).toBe(200);
     expect(r.body.ok).toBe(true);
     expect(r.body.steps.map((x: any) => [x.name, x.ok])).toEqual([
@@ -339,12 +352,12 @@ describe('一键连接', () => {
 
   it('同一张表格改由新活动同步时，旧活动的同步自动停止', async () => {
     const { eventId: a } = await prepared();
-    const url = (await call(ctx.app, 'GET', api(a), { cookie: ctx.adminCookie })).body.binding.webhookUrl;
+    const oa = (await call(ctx.app, 'GET', api(a), { cookie: ctx.adminCookie })).body;
     const b = await createFormalEvent(ctx, { ...FULL, name: '新活动' });
-    const r = await connect(b, { webhookUrl: url, token: mock().token });
+    const r = await connect(b, { webhookUrl: oa.binding.webhookUrl, token: mock().token, unitFiles: filesText(oa) });
     expect(r.body.steps.at(-1).detail).toContain('同步已自动停止');
-    const oa = await call(ctx.app, 'GET', api(a), { cookie: ctx.adminCookie });
-    expect(oa.body.binding.enabled).toBe(false);
+    const after = await call(ctx.app, 'GET', api(a), { cookie: ctx.adminCookie });
+    expect(after.body.binding.enabled).toBe(false);
     expect(ctx.kdocs.sync.isActive(a)).toBe(false);
     expect(ctx.kdocs.sync.isActive(b)).toBe(true);
     await call(ctx.app, 'PUT', api(b), { cookie: ctx.adminCookie, body: { enabled: false } });
@@ -356,19 +369,19 @@ describe('一键连接', () => {
     expect(bad.body.ok).toBe(false);
     expect(bad.body.steps.map((x: any) => x.ok)).toEqual([true, false]);
     expect(bad.body.steps[1].detail).toContain('AirScript-Token 无效');
-    const wb = mock().file(fileId)!;
+    const wb = mock().file(fileOf(fileId, '崇明'))!;
     wb.sheets.splice(wb.sheets.findIndex((x) => x.Name === '崇明'), 1);
     const miss = await connect(eventId, { token: mock().token });
-    expect(miss.body.steps[1].detail).toContain('缺少工作表：崇明');
+    expect(miss.body.steps[1].detail).toContain('崇明：文件中没有名为「崇明」的工作表');
     expect(miss.body.overview.binding.enabled).toBe(false);
   });
 
   it('沿用上次的金山表格：复制其他活动最近使用的链接与令牌（不含模拟）', async () => {
     const a = await createFormalEvent(ctx, { ...FULL, name: '上次的活动' });
     await ctx.db.query(
-      `INSERT INTO kdocs_bindings (event_id, webhook_url, token, interval_sec, max_rows, updated_at)
-       VALUES ($1, 'https://www.kdocs.cn/api/v3/ide/file/realfile1/script/realscript1/sync_task', 'real-token-abcd', 5, 30, now() + interval '1 hour')`,
-      [a],
+      `INSERT INTO kdocs_bindings (event_id, webhook_url, token, interval_sec, max_rows, updated_at, unit_files)
+       VALUES ($1, 'https://www.kdocs.cn/api/v3/ide/file/realfile1/script/realscript1/sync_task', 'real-token-abcd', 5, 30, now() + interval '1 hour', $2)`,
+      [a, JSON.stringify(Object.fromEntries(UNITS.map((u) => [u.code, `https://www.kdocs.cn/l/real-${u.code}`])))],
     );
     const b = await createFormalEvent(ctx, { ...FULL, name: '本次活动' });
     const o = await call(ctx.app, 'GET', api(b), { cookie: ctx.adminCookie });
@@ -376,13 +389,71 @@ describe('一键连接', () => {
     expect(JSON.stringify(o.body.reusable)).not.toContain('real-token');
     const r = await connect(b, { reuse: true, enable: false });
     expect(r.body.steps[0]).toMatchObject({ ok: true, detail: '已沿用上次的金山表格' });
-    const row = await ctx.db.query('SELECT webhook_url, token, interval_sec, max_rows FROM kdocs_bindings WHERE event_id = $1', [b]);
-    expect(row.rows[0]).toEqual({
+    const row = await ctx.db.query('SELECT webhook_url, token, interval_sec, max_rows, unit_files FROM kdocs_bindings WHERE event_id = $1', [b]);
+    expect(row.rows[0]).toMatchObject({
       webhook_url: 'https://www.kdocs.cn/api/v3/ide/file/realfile1/script/realscript1/sync_task',
       token: 'real-token-abcd',
       interval_sec: 5,
       max_rows: 30,
     });
+    expect(row.rows[0].unit_files.PD).toBe('https://www.kdocs.cn/l/real-PD');
     await ctx.db.query('DELETE FROM kdocs_bindings WHERE event_id IN ($1, $2)', [a, b]);
+  });
+});
+
+describe('每家单位一个文件（各单位互相看不到）', () => {
+  it('浦东的文件里只有浦东的工作表；读写都落在各自文件中', async () => {
+    const { eventId, fileId } = await prepared({ live: true });
+    expect(fileId).toMatch(/hub$/);
+    const pdFile = mock().file(fileOf(fileId, '浦东'))!;
+    expect(pdFile.sheets.map((x) => x.Name)).toEqual(['使用说明', '浦东']);
+    expect(mock().file(fileId)!.sheets.map((x) => x.Name)).toEqual(['使用说明']);
+    await ackViaDoc(eventId, fileId, '浦东');
+    edit(fileId, '浦东', 'B13', '35');
+    edit(fileId, '浦东', 'C13', '确认');
+    await syncNow(eventId);
+    expect(String(cell(fileId, '浦东', 'D13'))).toContain('已生效：30% → 35%');
+    // 闵行文件中看不到浦东的任何内容
+    const mhFile = mock().file(fileOf(fileId, '闵行'))!;
+    expect(JSON.stringify(mhFile.sheets.map((x) => x.read('A1:E52')))).not.toContain('浦东');
+  });
+
+  it('单位文件链接清单：缺单位、重复链接、无法识别的行都会提示', async () => {
+    const { eventId } = await prepared({ enable: false });
+    const put = (unitFiles: string) => call(ctx.app, 'PUT', api(eventId), { cookie: ctx.adminCookie, body: { unitFiles } });
+    const r1 = await put('浦东 mock://a1\n闵行 mock://a2');
+    expect(r1.body.error.message).toContain('还缺 14 家');
+    const r2 = await put(UNITS.map((u) => `${u.name} mock://same`).join('\n'));
+    expect(r2.body.error.message).toContain('用了同一个文件链接');
+    const r3 = await put('浦东 http://example.com/x');
+    expect(r3.body.error.message).toContain('无法识别链接');
+  });
+
+  it('某家单位的文件打不开：测试连接指出是哪家', async () => {
+    const { eventId } = await prepared({ enable: false });
+    const o = (await call(ctx.app, 'GET', api(eventId), { cookie: ctx.adminCookie })).body;
+    const text = filesText(o).replace(/浦东 mock:\/\/\S+/, '浦东 mock://nosuchfile');
+    await call(ctx.app, 'PUT', api(eventId), { cookie: ctx.adminCookie, body: { unitFiles: text } });
+    const r = await call(ctx.app, 'POST', api(eventId, '/connect'), { cookie: ctx.adminCookie, body: {} });
+    expect(r.body.steps[1].ok).toBe(false);
+    expect(r.body.steps[1].detail).toContain('浦东：无法打开文件');
+  });
+
+  it('一个文件 16 张工作表的方式仍可使用', async () => {
+    mock().failNext = 0;
+    const eventId = await createFormalEvent(ctx);
+    await importRows(ctx, eventId, fullRows('wealth', { pp: (c, m) => (c === 'PD' ? 30 : m) }));
+    const m = await call(ctx.app, 'POST', api(eventId, '/use-mock'), { cookie: ctx.adminCookie, body: { mode: 'single' } });
+    const fileId: string = m.body.mockFileId;
+    expect(m.body.binding.mode).toBe('single');
+    expect(mock().file(fileId)!.sheets).toHaveLength(17);
+    await enable(eventId);
+    await goLive(ctx, eventId, 'wealth', 1);
+    await ackViaDoc(eventId, fileId, '浦东');
+    edit(fileId, '浦东', 'B13', '35');
+    edit(fileId, '浦东', 'C13', '确认');
+    await syncNow(eventId);
+    expect(String(cell(fileId, '浦东', 'D13'))).toContain('已生效');
+    await enable(eventId, false);
   });
 });

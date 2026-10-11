@@ -170,12 +170,20 @@ export class KdocsMock {
     return this.files.get(fileId);
   }
 
-  /** 新建模拟文件：每家单位一张空工作表 + 一张说明表 */
-  createFile(fileId: string): MockWorkbook {
+  /** 新建模拟文件：每家单位一张空工作表 + 一张说明表（units 为空时只建说明表，作为「总控」文件） */
+  createFile(fileId: string, units: ReadonlyArray<{ name: string }> = UNITS): MockWorkbook {
     const wb = new MockWorkbook(fileId);
-    wb.addSheet('使用说明').write('A1', '模拟金山文档：表格版式由管理端「初始化表格」写入');
-    for (const u of UNITS) wb.addSheet(u.name);
+    wb.addSheet('使用说明').write('A1', units.length ? '模拟金山文档：表格版式由管理端「初始化表格」写入' : '模拟金山文档：竞标总控（只有工作人员能打开，存放同步脚本）');
+    for (const u of units) wb.addSheet(u.name);
     this.files.set(fileId, wb);
+    return wb;
+  }
+
+  /** KSDrive.openFile：模拟文件链接为 mock://文件编号 */
+  openByUrl(url: unknown): MockWorkbook {
+    const m = typeof url === 'string' ? /^mock:\/\/([A-Za-z0-9_-]+)$/.exec(url) : null;
+    const wb = m ? this.files.get(m[1]) : undefined;
+    if (!wb) throw new Error(`文件不存在或无权限：${String(url)}`);
     return wb;
   }
 
@@ -192,7 +200,7 @@ export class KdocsMock {
     const argv = (body as { Context?: { argv?: unknown } } | null)?.Context?.argv ?? {};
     const logs: string[] = [];
     try {
-      const result = runAirScript(wb, argv, logs);
+      const result = runAirScript(wb, argv, logs, (url) => this.openByUrl(url));
       return {
         httpStatus: 200,
         body: { status: 'finished', error: '', data: { result: this.stringifyResult ? JSON.stringify(result) : result, logs } },
@@ -237,9 +245,16 @@ export class KdocsMock {
 const compiled = new vm.Script(`(function () {\n${AIRSCRIPT_SOURCE}\n})()`, { filename: 'airscript.js' });
 
 /** 在隔离环境中运行 AirScript 源码 */
-export function runAirScript(wb: MockWorkbook, argv: unknown, logs: string[] = []): unknown {
+export function runAirScript(wb: MockWorkbook, argv: unknown, logs: string[] = [], openFile?: (url: unknown) => MockWorkbook): unknown {
   const sandbox = {
     Application: wb.application(),
+    KSDrive: {
+      openFile: (url: unknown) => {
+        if (!openFile) throw new Error('KSDrive 不可用');
+        const other = openFile(url);
+        return { Application: other.application(), close: () => {} };
+      },
+    },
     Context: { argv: JSON.parse(JSON.stringify(argv ?? {})) },
     console: { log: (...a: unknown[]) => logs.push(a.map(String).join(' ')) },
   };

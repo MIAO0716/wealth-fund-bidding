@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { UNITS, parseUnitFiles } from '@bidding/shared';
+import { useEffect, useMemo, useState } from 'react';
 import { api, errorText } from '../../lib/api';
 import { fmtTime } from '../../lib/format';
 import type { TabProps } from './EventPage';
@@ -13,6 +14,8 @@ interface Overview {
     baselineDone: boolean;
     enabledAt: string | null;
     isMock: boolean;
+    mode: 'files' | 'single';
+    unitFiles: Array<{ unitCode: string; unitName: string; url: string | null }> | null;
   } | null;
   status: {
     state: 'STOPPED' | 'RUNNING' | 'ERROR' | 'READ_ONLY';
@@ -69,6 +72,14 @@ export function KdocsTab({ eventId }: TabProps) {
   const [busy, setBusy] = useState(false);
   const [steps, setSteps] = useState<ConnectResult['steps'] | null>(null);
   const [enableAfter, setEnableAfter] = useState(true);
+  const [mode, setMode] = useState<'files' | 'single'>('files');
+  const [filesText, setFilesText] = useState('');
+  const parsedFiles = useMemo(() => (filesText.trim() ? parseUnitFiles(filesText, UNITS, true) : null), [filesText]);
+  const syncFromBinding = (bd: Overview['binding']) => {
+    if (!bd) return;
+    setMode(bd.mode);
+    setFilesText((bd.unitFiles ?? []).filter((f) => f.url).map((f) => `${f.unitName} ${f.url}`).join('\n'));
+  };
 
   const load = () =>
     api
@@ -81,7 +92,10 @@ export function KdocsTab({ eventId }: TabProps) {
 
   useEffect(() => {
     void load().then((o) => {
-      if (o && o.binding) setForm({ webhookUrl: o.binding.webhookUrl, token: '', intervalSec: o.binding.intervalSec, maxRows: o.binding.maxRows });
+      if (o && o.binding) {
+        setForm({ webhookUrl: o.binding.webhookUrl, token: '', intervalSec: o.binding.intervalSec, maxRows: o.binding.maxRows });
+        syncFromBinding(o.binding);
+      }
     });
     const t = setInterval(() => void load(), 2000);
     return () => clearInterval(t);
@@ -132,14 +146,26 @@ export function KdocsTab({ eventId }: TabProps) {
           : {
               ...(form.webhookUrl.trim() ? { webhookUrl: form.webhookUrl.trim() } : {}),
               ...(form.token.trim() ? { token: form.token.trim() } : {}),
+              unitFiles: mode === 'files' ? filesText : '',
               enable: enableAfter,
             },
         { timeoutMs: 60_000 },
       );
       setSteps(r.steps);
       setOv(r.overview);
-      if (r.overview.binding) setForm((f) => ({ ...f, webhookUrl: r.overview.binding!.webhookUrl, token: '' }));
-      if (r.ok) setMsg({ ok: true, text: enableAfter ? '已连接并开启同步。下一步：在金山文档中给各单位工作表设置权限，并分享给领导。' : '已连接。' });
+      if (r.overview.binding) {
+        setForm((f) => ({ ...f, webhookUrl: r.overview.binding!.webhookUrl, token: '' }));
+        syncFromBinding(r.overview.binding);
+      }
+      if (r.ok)
+        setMsg({
+          ok: true,
+          text: enableAfter
+            ? mode === 'files'
+              ? '已连接并开启同步。下一步：把 16 个单位文件分别只分享给对应单位的领导。'
+              : '已连接并开启同步。下一步：在金山文档中给各单位工作表设置权限，并分享给领导。'
+            : '已连接。',
+        });
     } catch (e) {
       setMsg({ ok: false, text: errorText(e) });
     } finally {
@@ -147,7 +173,13 @@ export function KdocsTab({ eventId }: TabProps) {
     }
   };
 
-  const mockLink = b?.isMock ? `/mock-kdocs?file=${encodeURIComponent(/\/file\/([^/]+)\//.exec(b.webhookUrl)?.[1] ?? '')}` : null;
+  const mockLinks: Array<{ label: string; href: string }> = !b?.isMock
+    ? []
+    : b.unitFiles
+      ? b.unitFiles
+          .filter((f) => f.url?.startsWith('mock://'))
+          .map((f) => ({ label: f.unitName, href: `/mock-kdocs?file=${encodeURIComponent(f.url!.slice('mock://'.length))}` }))
+      : [{ label: '打开模拟表格（领导填写页）', href: `/mock-kdocs?file=${encodeURIComponent(/\/file\/([^/]+)\//.exec(b.webhookUrl)?.[1] ?? '')}` }];
 
   return (
     <div className="a-grid" style={{ gridTemplateColumns: 'minmax(0,3fr) minmax(300px,2fr)' }}>
@@ -157,17 +189,47 @@ export function KdocsTab({ eventId }: TabProps) {
           <p className="small muted" style={{ marginTop: 0 }}>
             领导在金山文档（微信内打开）本单位的工作表里填写「加到多少」并选「确认」；本程序每隔几秒读取一次，按与手机端相同的规则处理，并把结果写回表格。
           </p>
+          <div className="kd-mode">
+            <label className={mode === 'files' ? 'on' : ''}>
+              <input type="radio" name="kd-mode" checked={mode === 'files'} onChange={() => setMode('files')} />
+              <span>
+                <b>每家单位一个文件（推荐）</b>
+                <small>各单位只能打开自己的文件，互相看不到</small>
+              </span>
+            </label>
+            <label className={mode === 'single' ? 'on' : ''}>
+              <input type="radio" name="kd-mode" checked={mode === 'single'} onChange={() => setMode('single')} />
+              <span>
+                <b>一个文件 16 张工作表</b>
+                <small>准备最简单，但各单位能看到彼此的工作表</small>
+              </span>
+            </label>
+          </div>
           <details className="small" style={{ marginBottom: 10 }} open={!b && !ov?.reusable}>
             <summary style={{ cursor: 'pointer', fontWeight: 600 }}>第一次使用：在金山文档里准备（只需做一次，以后各场活动沿用）</summary>
-            <ol style={{ paddingLeft: 18, lineHeight: 1.8, margin: '6px 0 0' }}>
-              <li>
-                下载<a href={`${base}/template.xlsx`}>填报表模板</a>，在金山文档网页版「导入」成在线表格（不要改工作表名称）。
-              </li>
-              <li>
-                在该表格中打开 AirScript 脚本编辑器（一般在「效率」→「高级开发」），新建共享脚本，粘贴<a href="/api/v1/admin/kdocs/airscript.js">同步脚本</a>全文，保存。
-              </li>
-              <li>在脚本编辑器中生成「脚本令牌」；在脚本的「…」菜单中「复制 webhook 链接」。把两样粘贴到下面。</li>
-            </ol>
+            {mode === 'files' ? (
+              <ol style={{ paddingLeft: 18, lineHeight: 1.8, margin: '6px 0 0' }}>
+                <li>
+                  下载<a href={`${base}/template-files.zip`}>模板压缩包</a>并解压：1 个「竞标总控」+ 16 个单位文件。在金山文档网页版把 17 个文件一起「导入」（不要改工作表名称）。
+                </li>
+                <li>
+                  打开「竞标总控」→ AirScript 脚本编辑器（一般在「效率」→「高级开发」），新建共享脚本，粘贴<a href="/api/v1/admin/kdocs/airscript.js">同步脚本</a>全文，保存；在编辑器的「服务」中添加「云文档」。
+                </li>
+                <li>在脚本编辑器中生成「脚本令牌」；在脚本的「…」菜单中「复制 webhook 链接」。</li>
+                <li>逐个复制 16 个单位文件的分享链接，按「单位名称 链接」每行一家，粘贴到下面的清单里。</li>
+                <li>每个单位文件只分享给对应单位的领导（可编辑）；「竞标总控」不要分享。</li>
+              </ol>
+            ) : (
+              <ol style={{ paddingLeft: 18, lineHeight: 1.8, margin: '6px 0 0' }}>
+                <li>
+                  下载<a href={`${base}/template.xlsx`}>填报表模板</a>，在金山文档网页版「导入」成在线表格（不要改工作表名称）。
+                </li>
+                <li>
+                  在该表格中打开 AirScript 脚本编辑器（一般在「效率」→「高级开发」），新建共享脚本，粘贴<a href="/api/v1/admin/kdocs/airscript.js">同步脚本</a>全文，保存。
+                </li>
+                <li>在脚本编辑器中生成「脚本令牌」；在脚本的「…」菜单中「复制 webhook 链接」。把两样粘贴到下面。</li>
+              </ol>
+            )}
           </details>
 
           {ov?.reusable && (!b || b.webhookUrl !== ov.reusable.webhookUrl) && (
@@ -201,6 +263,25 @@ export function KdocsTab({ eventId }: TabProps) {
               <span>脚本令牌（AirScript-Token）{b ? `：已保存 ${b.tokenMasked}，留空不修改` : ''}</span>
               <input type="password" autoComplete="off" value={form.token} onChange={(e) => setForm({ ...form, token: e.target.value })} />
             </label>
+            {mode === 'files' && (
+              <label className="field" style={{ gridColumn: '1 / -1' }}>
+                <span>16 家单位文件链接（每行一家：单位名称 + 链接，顺序不限）</span>
+                <textarea
+                  rows={6}
+                  value={filesText}
+                  onChange={(e) => setFilesText(e.target.value)}
+                  placeholder={'浦东 https://www.kdocs.cn/l/xxxxxxxx\n闵行 https://www.kdocs.cn/l/xxxxxxxx\n……'}
+                  style={{ fontFamily: 'inherit', fontSize: 13 }}
+                />
+                {parsedFiles && (
+                  <span className="small" style={{ color: parsedFiles.errors.length || parsedFiles.missing.length ? 'var(--red)' : 'var(--ok)' }}>
+                    已识别 {Object.keys(parsedFiles.files).length} / 16 家
+                    {parsedFiles.missing.length > 0 && parsedFiles.missing.length < 16 ? `；还缺：${parsedFiles.missing.join('、')}` : ''}
+                    {parsedFiles.errors.length ? `；${parsedFiles.errors.slice(0, 2).join('；')}` : ''}
+                  </span>
+                )}
+              </label>
+            )}
           </div>
           <div className="a-row" style={{ marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
             <button className="btn btn-primary" disabled={busy || (!form.webhookUrl.trim() && !b)} onClick={() => void connect({})}>
@@ -282,9 +363,12 @@ export function KdocsTab({ eventId }: TabProps) {
                   disabled={busy || !!b?.enabled}
                   onClick={() =>
                     void run(
-                      () => api.post<Overview>(`${base}/use-mock`),
+                      () => api.post<Overview>(`${base}/use-mock`, { mode }),
                       (r: Overview) => {
-                        if (r.binding) setForm((f) => ({ ...f, webhookUrl: r.binding!.webhookUrl, token: '' }));
+                        if (r.binding) {
+                          setForm((f) => ({ ...f, webhookUrl: r.binding!.webhookUrl, token: '' }));
+                          syncFromBinding(r.binding);
+                        }
                         return '已切换到模拟金山文档并写好版式，可以「开启同步」了';
                       },
                     )
@@ -292,12 +376,22 @@ export function KdocsTab({ eventId }: TabProps) {
                 >
                   使用模拟金山文档
                 </button>
-                {mockLink && (
-                  <a className="btn" href={mockLink} target="_blank" rel="noreferrer">
-                    打开模拟表格（领导填写页）
+                {mockLinks.length === 1 && (
+                  <a className="btn" href={mockLinks[0].href} target="_blank" rel="noreferrer">
+                    {mockLinks[0].label}
                   </a>
                 )}
               </div>
+              {mockLinks.length > 1 && (
+                <div className="kd-mock-links">
+                  <span className="small muted">打开模拟的单位文件（领导填写页）：</span>
+                  {mockLinks.map((l) => (
+                    <a key={l.href} href={l.href} target="_blank" rel="noreferrer">
+                      {l.label}
+                    </a>
+                  ))}
+                </div>
+              )}
             </>
           )}
           <p className="small muted">

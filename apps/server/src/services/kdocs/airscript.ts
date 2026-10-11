@@ -9,22 +9,27 @@
  * 语法保持 ES5（var / function），不依赖新语法。
  */
 
-export const AIRSCRIPT_VERSION = '1.0.0';
+export const AIRSCRIPT_VERSION = '1.1.0';
 
 export const AIRSCRIPT_SOURCE = `/**
  * 理财、基金现场竞标 · 金山文档同步脚本 v${AIRSCRIPT_VERSION}（协议 1）
  *
  * 用途：本机竞标程序通过「脚本令牌」调用本脚本，读取各单位工作表中领导填写的内容，
  *       并把处理结果写回表格。本脚本不做任何业务判断。
- * 用法：见《金山文档接入说明》。请整体粘贴，不要修改；更新时从管理端重新下载并整体替换。
+ * 两种用法：
+ *   - 一个文件 16 张工作表：脚本放在这个文件里；
+ *   - 每家单位一个文件（推荐，各单位互相看不到）：脚本放在只有工作人员能打开的「总控」文件里，
+ *     通过 KSDrive.openFile 打开各单位文件读写（需在脚本编辑器的「服务」中添加「云文档」）。
+ * 用法见《金山文档接入说明》。请整体粘贴，不要修改；更新时从管理端重新下载并整体替换。
  */
 var PROTOCOL = 1;
+var SCRIPT_VERSION = '${AIRSCRIPT_VERSION}';
 var MAX_WRITES = 3000;
 var MAX_READS = 64;
 
-function listSheetNames() {
+function listSheetNames(app) {
   var names = [];
-  var sheets = Application.Sheets;
+  var sheets = app.Sheets;
   for (var i = 1; i <= sheets.Count; i++) {
     names.push(String(sheets.Item(i).Name));
   }
@@ -43,14 +48,22 @@ function isSingleCell(values) {
 }
 
 function main(argv) {
-  var result = { protocol: PROTOCOL, ok: true, sheets: [], missingSheets: [], reads: [], written: 0, errors: [] };
+  var result = {
+    protocol: PROTOCOL,
+    scriptVersion: SCRIPT_VERSION,
+    supportsFiles: true,
+    ok: true,
+    sheets: [],
+    missingSheets: [],
+    reads: [],
+    written: 0,
+    errors: []
+  };
   if (!argv || argv.protocol !== PROTOCOL) {
     result.ok = false;
     result.errors.push('协议版本不匹配，请从管理端重新下载脚本并整体替换');
     return result;
   }
-  var names = listSheetNames();
-  result.sheets = names;
   var writes = argv.writes || [];
   var reads = argv.reads || [];
   if (writes.length > MAX_WRITES || reads.length > MAX_READS) {
@@ -58,21 +71,45 @@ function main(argv) {
     result.errors.push('单次读写数量超出限制');
     return result;
   }
-  var missing = {};
-  function sheetOf(name) {
-    if (names.indexOf(name) < 0) {
-      missing[name] = true;
-      return null;
+
+  // 本文件 + 本次用到的其他文件（每个文件只打开一次，结束时关闭）
+  var books = { '': { app: Application, names: listSheetNames(Application), error: null } };
+  var opened = [];
+  result.sheets = books[''].names;
+  function bookOf(file) {
+    var key = file || '';
+    if (books[key]) return books[key];
+    try {
+      var f = KSDrive.openFile(file);
+      opened.push(f);
+      books[key] = { app: f.Application, names: listSheetNames(f.Application), error: null };
+    } catch (e) {
+      books[key] = { app: null, names: [], error: '无法打开文件（请确认链接正确、脚本所有者有权限，且已在「服务」中添加云文档）：' + e };
     }
-    return Application.Sheets.Item(name);
+    return books[key];
   }
+  var missing = {};
+  function sheetOf(file, name) {
+    var b = bookOf(file);
+    if (b.error) return { error: b.error };
+    if (b.names.indexOf(name) < 0) {
+      missing[name] = true;
+      return { error: null, sheet: null };
+    }
+    return { error: null, sheet: b.app.Sheets.Item(name) };
+  }
+
   // 先写后读：本次读取的内容已包含本次写入
   for (var i = 0; i < writes.length; i++) {
     var w = writes[i];
-    var ws = sheetOf(w.sheet);
-    if (!ws) continue;
+    var ws = sheetOf(w.file, w.sheet);
+    if (ws.error) {
+      result.errors.push(w.sheet + '：' + ws.error);
+      continue;
+    }
+    if (!ws.sheet) continue;
     try {
-      ws.Range(w.range).Value = isSingleCell(w.values) ? w.values[0][0] : w.values;
+      ws.sheet.Range(w.range).Value = isSingleCell(w.values) ? w.values[0][0] : w.values;
       result.written++;
     } catch (e) {
       result.errors.push('写入 ' + w.sheet + '!' + w.range + ' 失败：' + e);
@@ -80,18 +117,23 @@ function main(argv) {
   }
   for (var j = 0; j < reads.length; j++) {
     var r = reads[j];
-    var rs = sheetOf(r.sheet);
-    if (!rs) {
-      result.reads.push({ sheet: r.sheet, range: r.range, values: null });
+    var rs = sheetOf(r.file, r.sheet);
+    if (rs.error || !rs.sheet) {
+      result.reads.push({ file: r.file, sheet: r.sheet, range: r.range, values: null, error: rs.error || undefined });
       continue;
     }
     try {
-      result.reads.push({ sheet: r.sheet, range: r.range, values: to2D(rs.Range(r.range).Value2) });
+      result.reads.push({ file: r.file, sheet: r.sheet, range: r.range, values: to2D(rs.sheet.Range(r.range).Value2) });
     } catch (e2) {
-      result.reads.push({ sheet: r.sheet, range: r.range, values: null, error: String(e2) });
+      result.reads.push({ file: r.file, sheet: r.sheet, range: r.range, values: null, error: String(e2) });
     }
   }
-  for (var k in missing) result.missingSheets.push(k);
+  for (var k = 0; k < opened.length; k++) {
+    try {
+      opened[k].close();
+    } catch (e3) {}
+  }
+  for (var m in missing) result.missingSheets.push(m);
   if (result.errors.length > 0) result.ok = false;
   return result;
 }

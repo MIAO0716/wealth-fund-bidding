@@ -89,14 +89,19 @@ export function parseTargetCell(v: unknown): ParsedTarget {
   return { ok: true, pp: rounded };
 }
 
-/** AirScript 一次调用的读写指令（本机 → 脚本） */
+/**
+ * AirScript 一次调用的读写指令（本机 → 脚本）。
+ * file 为空：读写脚本所在文件；file 为文件链接：脚本用 KSDrive.openFile 打开该文件再读写（每家单位一个文件的模式）。
+ */
 export interface KdocsWrite {
+  file?: string;
   sheet: string;
   range: string;
   values: unknown[][];
 }
 
 export interface KdocsRead {
+  file?: string;
   sheet: string;
   range: string;
 }
@@ -112,9 +117,64 @@ export interface KdocsBatchArgv {
 export interface KdocsBatchResult {
   protocol: number;
   ok: boolean;
+  /** 脚本版本；1.1 起支持跨文件读写 */
+  scriptVersion?: string;
+  supportsFiles?: boolean;
   sheets?: string[];
   missingSheets?: string[];
-  reads?: Array<{ sheet: string; range: string; values: unknown[][] | null; error?: string }>;
+  reads?: Array<{ file?: string; sheet: string; range: string; values: unknown[][] | null; error?: string }>;
   written?: number;
   errors?: string[];
+}
+
+// ---------------------------------------------------------------- 每家单位一个文件
+
+/** 金山文档文件链接：https://*.kdocs.cn/... ；模拟金山文档为 mock://文件编号 */
+export function isKdocsFileUrl(url: string, allowMock = false): boolean {
+  if (allowMock && /^mock:\/\/[A-Za-z0-9_-]+$/.test(url)) return true;
+  return /^https:\/\/([A-Za-z0-9-]+\.)*kdocs\.cn\/[^\s]+$/.test(url) && !/\/api\/v3\/ide\//.test(url);
+}
+
+export interface ParsedUnitFiles {
+  files: Record<string, string>;
+  /** 无法识别的行 */
+  errors: string[];
+  missing: string[];
+}
+
+/**
+ * 解析「单位名称 + 文件链接」清单，每行一家，顺序不限，例如：
+ *   浦东 https://www.kdocs.cn/l/abc123
+ *   闵行：https://www.kdocs.cn/l/def456
+ * 也可以是金山分享时复制的「【金山文档】 浦东 https://...」。
+ */
+export function parseUnitFiles(text: string, units: ReadonlyArray<{ code: string; name: string }>, allowMock = false): ParsedUnitFiles {
+  const files: Record<string, string> = {};
+  const errors: string[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const m = /(https:\/\/\S+|mock:\/\/[A-Za-z0-9_-]+)/.exec(line);
+    const url = m?.[1].replace(/[，。,;；）)」】]+$/, '');
+    const rest = m ? line.replace(m[1], ' ') : line;
+    const hits = units.filter((u) => rest.includes(u.name));
+    if (!url || !isKdocsFileUrl(url, allowMock)) {
+      errors.push(`无法识别链接：${line.slice(0, 60)}`);
+      continue;
+    }
+    if (hits.length !== 1) {
+      errors.push(hits.length ? `一行只能写一家单位：${line.slice(0, 60)}` : `没有找到单位名称：${line.slice(0, 60)}`);
+      continue;
+    }
+    const u = hits[0];
+    if (files[u.code] && files[u.code] !== url) errors.push(`${u.name}出现了两个不同的链接`);
+    files[u.code] = url;
+  }
+  const used = new Map<string, string>();
+  for (const [code, url] of Object.entries(files)) {
+    const other = used.get(url);
+    if (other) errors.push(`${units.find((u) => u.code === other)?.name}和${units.find((u) => u.code === code)?.name}用了同一个文件链接`);
+    used.set(url, code);
+  }
+  return { files, errors, missing: units.filter((u) => !files[u.code]).map((u) => u.name) };
 }

@@ -61,8 +61,11 @@ test('领导在（模拟）金山文档中填写：确认底标 → 加码生效
     await expect(page.locator('.kd-steps li.ok', { hasText: step })).toBeVisible({ timeout: 15_000 });
   }
   await expect(page.locator('.chip', { hasText: '同步中' })).toBeVisible();
-  const mockHref = await page.getByRole('link', { name: '打开模拟表格（领导填写页）' }).getAttribute('href');
+  // 默认「每家单位一个文件」：每家单位有自己的模拟文件
+  await expect(page.locator('.kd-steps li.ok', { hasText: '16 家单位文件都能打开' })).toBeVisible();
+  const mockHref = await page.locator('.kd-mock-links').getByRole('link', { name: '浦东', exact: true }).getAttribute('href');
   const fileId = new URL(mockHref!, baseURL).searchParams.get('file')!;
+  expect(fileId).toMatch(/-PD$/);
 
   // 大屏
   const key = await (await req.post(`/api/v1/admin/events/${eventId}/screen-keys`, { headers: H, data: { label: '主屏' } })).json();
@@ -75,7 +78,9 @@ test('领导在（模拟）金山文档中填写：确认底标 → 加码生效
   // 浦东领导：手机打开本单位工作表
   const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
   const sheet = await phone.newPage();
-  await sheet.goto(`/mock-kdocs?file=${fileId}&sheet=${encodeURIComponent('浦东')}`);
+  await sheet.goto(`/mock-kdocs?file=${fileId}`);
+  // 浦东的文件里只有浦东一张表，看不到其他单位
+  await expect(sheet.locator('.mk-tab')).toHaveCount(1);
   const row = (r: number) => sheet.locator('.mk-grid tbody tr').nth(r - 1);
   await expect(row(11)).toContainText('请在 B11 选择「确认」认领理财底标', { timeout: 10_000 });
   await sheet.getByLabel('浦东 B11').selectOption('确认');
@@ -101,6 +106,7 @@ test('领导在（模拟）金山文档中填写：确认底标 → 加码生效
 
   // 管理端看到处理记录；现场控制中来源标注「金山文档」
   await expect(page.getByText('已生效 1 · 未生效 1')).toBeVisible({ timeout: 10_000 });
+  await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: `${SHOTS}/kdocs-admin.png`, fullPage: true });
   await page.goto(`/admin/events/${eventId}/control`);
   await expect(page.locator('.chip', { hasText: '金山文档' }).first()).toBeVisible();

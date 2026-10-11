@@ -1634,3 +1634,37 @@ textarea {
 .kd-steps li span {
   color: var(--muted);
 }
+.kd-mode {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.kd-mode label {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  background: #fff;
+}
+.kd-mode label.on {
+  border-color: var(--red);
+  background: #fff7f5;
+}
+.kd-mode span {
+  display: grid;
+  gap: 2px;
+}
+.kd-mode small {
+  color: var(--muted);
+}
+.kd-mock-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 10px;
+  align-items: center;
+}

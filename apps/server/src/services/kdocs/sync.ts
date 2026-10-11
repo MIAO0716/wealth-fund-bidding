@@ -47,6 +47,8 @@ export interface KdocsBindingRow {
   baseline_done: boolean;
   enabled_at: Date | null;
   updated_at: Date;
+  /** 每家单位一个文件：单位代码 → 文件链接；为空表示一个文件 16 张工作表 */
+  unit_files: Record<string, string> | null;
 }
 
 export interface KdocsStatus {
@@ -60,6 +62,8 @@ export interface KdocsStatus {
   calls: number;
   failures: number;
   missingUnits: string[];
+  /** 打不开的单位文件等提示 */
+  unitErrors: string[];
   baselineDone: boolean;
 }
 
@@ -162,6 +166,7 @@ class EventSync {
       calls: 0,
       failures: 0,
       missingUnits: [],
+      unitErrors: [],
       baselineDone: binding.baseline_done,
     };
   }
@@ -224,14 +229,18 @@ class EventSync {
       if (!this.consumed) this.consumed = await this.loadConsumed();
 
       // 1. 读取各单位填写区（顺带补写上一轮未成功写入的内容）
-      const reads = UNITS.map((u) => ({ sheet: u.name, range: kdocsReadRange(maxRows) }));
+      const reads = UNITS.map((u) => ({ ...this.target(u), range: kdocsReadRange(maxRows) }));
       const { result, callNo } = await this.send(reads);
       if (result.errors?.length) this.log(`金山文档脚本报告：${result.errors.slice(0, 3).join('；')}`);
 
-      const missing = new Set(result.missingSheets ?? []);
-      this.status.missingUnits = UNITS.filter((u) => missing.has(u.name)).map((u) => u.name);
       const grids = new Map<string, unknown[][]>();
-      for (const r of result.reads ?? []) if (r.values) grids.set(r.sheet, r.values);
+      const unitErrors: string[] = [];
+      for (const r of result.reads ?? []) {
+        if (r.values) grids.set(r.sheet, r.values);
+        else if (r.error) unitErrors.push(`${r.sheet}：${r.error}`);
+      }
+      this.status.missingUnits = UNITS.filter((u) => !grids.has(u.name)).map((u) => u.name);
+      this.status.unitErrors = unitErrors.slice(0, 5);
 
       // 2. 首次开启：已有内容标记为「开始同步前已填写」
       if (!this.binding.baseline_done) {
@@ -266,7 +275,13 @@ class EventSync {
   }
 
   /** 一次脚本调用：先写（一次性指令 + 与上次写入不同的内容），后读 */
-  private async send(reads: Array<{ sheet: string; range: string }>) {
+  /** 单位工作表所在位置：每家一个文件时带上文件链接 */
+  private target(unit: UnitDef): { file?: string; sheet: string } {
+    const file = this.binding.unit_files?.[unit.code];
+    return file ? { file, sheet: unit.name } : { sheet: unit.name };
+  }
+
+  private async send(reads: Array<{ file?: string; sheet: string; range: string }>) {
     const writes = this.pendingWrites();
     const shots = this.oneShot.splice(0);
     let result;
@@ -280,6 +295,9 @@ class EventSync {
     } catch (e) {
       this.oneShot.unshift(...shots);
       throw e;
+    }
+    if (this.binding.unit_files && result.supportsFiles !== true) {
+      throw new KdocsError('脚本版本过旧，不支持「每家单位一个文件」：请从管理端重新下载脚本，在总控文件中整体替换', 'PROTOCOL');
     }
     const callNo = ++this.callNo;
     this.status.calls++;
@@ -479,7 +497,7 @@ class EventSync {
         p.currentTargetWan ?? '—',
         nt.length ? nt.join(' / ') : !p.baseAcknowledged && p.status !== 'DRAFT' ? '请先在 B11 确认认领底标' : '—',
       ];
-      put(next, unit.name, KDOCS_LAYOUT.infoValueRange, info.map((v) => [v]));
+      put(next, this.target(unit), KDOCS_LAYOUT.infoValueRange, info.map((v) => [v]));
 
       // 本专场第一次需要认领：清空 B11（与下面的提示同一次写入），之后读到的「确认」才有效
       if (!p.baseAcknowledged && p.status !== 'DRAFT' && p.status !== 'LOCKED') this.ensureAckPrompt(unit, project);
@@ -489,7 +507,7 @@ class EventSync {
       else if (p.baseAcknowledged) ackText = `已确认（${PROJECT_NAMES[project]}，${p.baseAcknowledgedAt ? fmtTime(p.baseAcknowledgedAt) : ''}）`;
       else if (this.ackErrors.has(unit.code)) ackText = `未生效：${this.ackErrors.get(unit.code)}`;
       else ackText = `请在 B${KDOCS_LAYOUT.ackRow} 选择「确认」认领${PROJECT_NAMES[project]}底标`;
-      put(next, unit.name, `C${KDOCS_LAYOUT.ackRow}`, [[ackText]]);
+      put(next, this.target(unit), `C${KDOCS_LAYOUT.ackRow}`, [[ackText]]);
 
       const grid = grids.get(unit.name);
       const rows = grid ? bidRows(grid, this.binding.max_rows) : [];
@@ -506,14 +524,14 @@ class EventSync {
           d = '待确认：请在 C 列选择「确认」后生效';
         }
         const key = `${unit.name}!D${rowNo}:E${rowNo}`;
-        if (d || this.written.has(key)) put(next, unit.name, `D${rowNo}:E${rowNo}`, [[d, t]]);
+        if (d || this.written.has(key)) put(next, this.target(unit), `D${rowNo}:E${rowNo}`, [[d, t]]);
       }
     }
     // 同步时间：每 30 秒或有其他变化时更新
     const stamp = fmtTime(new Date());
     for (const unit of UNITS) {
       if (this.status.missingUnits.includes(unit.name)) continue;
-      put(next, unit.name, `${KDOCS_LAYOUT.syncValueCell}`, [[stamp]]);
+      put(next, this.target(unit), `${KDOCS_LAYOUT.syncValueCell}`, [[stamp]]);
     }
     this.lastStampAt = now;
     this.desired = next;
@@ -529,7 +547,7 @@ class EventSync {
     this.ackPrompt.set(unit.code, entry);
     this.ackErrors.delete(unit.code);
     this.oneShot.push({
-      write: { sheet: unit.name, range: `B${KDOCS_LAYOUT.ackRow}`, values: [['']] },
+      write: { ...this.target(unit), range: `B${KDOCS_LAYOUT.ackRow}`, values: [['']] },
       onSent: (n) => {
         entry.sentCall = n;
       },
@@ -542,8 +560,8 @@ class EventSync {
   }
 }
 
-function put(m: Map<string, KdocsWrite>, sheet: string, range: string, values: unknown[][]): void {
-  m.set(`${sheet}!${range}`, { sheet, range, values });
+function put(m: Map<string, KdocsWrite>, at: { file?: string; sheet: string }, range: string, values: unknown[][]): void {
+  m.set(`${at.sheet}!${range}`, { ...at, range, values });
 }
 
 function appliedText(fromPp: number, toPp: number, receiptNo: string): string {
@@ -623,7 +641,12 @@ export class KdocsSyncManager {
       this.loops.delete(eventId);
       return;
     }
-    if (existing && existing.binding.webhook_url === b.webhook_url && existing.binding.max_rows === b.max_rows) {
+    if (
+      existing &&
+      existing.binding.webhook_url === b.webhook_url &&
+      existing.binding.max_rows === b.max_rows &&
+      JSON.stringify(existing.binding.unit_files) === JSON.stringify(b.unit_files)
+    ) {
       existing.binding = b;
       return;
     }
