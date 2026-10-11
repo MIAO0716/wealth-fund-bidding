@@ -26,6 +26,7 @@ interface Overview {
     missingUnits: string[];
   } | null;
   mockAvailable: boolean;
+  reusable: { eventId: string; eventName: string; webhookUrl: string; updatedAt: string | null } | null;
   counts: Record<string, number>;
   rows: Array<{
     unitCode: string;
@@ -36,6 +37,22 @@ interface Overview {
     message: string;
     seenAt: string;
   }>;
+}
+
+interface ConnectResult {
+  ok: boolean;
+  steps: Array<{ name: string; ok: boolean; detail: string }>;
+  overview: Overview;
+}
+
+const KDOCS_URL = /https:\/\/[A-Za-z0-9.-]*kdocs\.cn\/api\/v3\/ide\/file\/[A-Za-z0-9_-]+\/script\/[A-Za-z0-9_-]+\/sync_task/;
+
+/** 链接和令牌一起粘贴进来时自动拆开 */
+function splitPaste(text: string): { url: string; token: string } | null {
+  const m = KDOCS_URL.exec(text);
+  if (!m) return null;
+  const rest = text.replace(m[0], ' ').split(/[\s,，;；]+/).filter((x) => x.length >= 8 && !/[：:]$/.test(x));
+  return { url: m[0], token: rest.sort((a, b) => b.length - a.length)[0] ?? '' };
 }
 
 const STATUS_CHIP: Record<string, [string, string]> = {
@@ -50,6 +67,8 @@ export function KdocsTab({ eventId }: TabProps) {
   const [form, setForm] = useState({ webhookUrl: '', token: '', intervalSec: 3, maxRows: 40 });
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [steps, setSteps] = useState<ConnectResult['steps'] | null>(null);
+  const [enableAfter, setEnableAfter] = useState(true);
 
   const load = () =>
     api
@@ -94,11 +113,39 @@ export function KdocsTab({ eventId }: TabProps) {
           maxRows: Number(form.maxRows),
           ...(enabled !== undefined ? { enabled } : {}),
         }),
-      () => {
+      (r: { stoppedEvents?: string[] }) => {
         setForm((f) => ({ ...f, token: '' }));
-        return enabled === true ? '已开启同步' : enabled === false ? '已停止同步' : '已保存';
+        const stopped = r.stoppedEvents?.length ? `；这张表格在「${r.stoppedEvents.join('」「')}」上的同步已自动停止` : '';
+        return (enabled === true ? '已开启同步' : enabled === false ? '已停止同步' : '已保存') + stopped;
       },
     );
+
+  const connect = async (opts: { reuse?: boolean }) => {
+    setBusy(true);
+    setMsg(null);
+    setSteps(null);
+    try {
+      const r = await api.post<ConnectResult>(
+        `${base}/connect`,
+        opts.reuse
+          ? { reuse: true, enable: enableAfter }
+          : {
+              ...(form.webhookUrl.trim() ? { webhookUrl: form.webhookUrl.trim() } : {}),
+              ...(form.token.trim() ? { token: form.token.trim() } : {}),
+              enable: enableAfter,
+            },
+        { timeoutMs: 60_000 },
+      );
+      setSteps(r.steps);
+      setOv(r.overview);
+      if (r.overview.binding) setForm((f) => ({ ...f, webhookUrl: r.overview.binding!.webhookUrl, token: '' }));
+      if (r.ok) setMsg({ ok: true, text: enableAfter ? '已连接并开启同步。下一步：在金山文档中给各单位工作表设置权限，并分享给领导。' : '已连接。' });
+    } catch (e) {
+      setMsg({ ok: false, text: errorText(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const mockLink = b?.isMock ? `/mock-kdocs?file=${encodeURIComponent(/\/file\/([^/]+)\//.exec(b.webhookUrl)?.[1] ?? '')}` : null;
 
@@ -106,87 +153,120 @@ export function KdocsTab({ eventId }: TabProps) {
     <div className="a-grid" style={{ gridTemplateColumns: 'minmax(0,3fr) minmax(300px,2fr)' }}>
       <div>
         <div className="a-card">
-          <h3>金山文档接入</h3>
+          <h3>一键连接金山文档</h3>
           <p className="small muted" style={{ marginTop: 0 }}>
-            领导在金山文档（微信内打开）中本单位的工作表里填写「加到多少」并选「确认」；本程序每隔几秒读取一次，按与手机端相同的规则处理，并把结果写回表格。
-            详细步骤见《金山文档接入说明》。
+            领导在金山文档（微信内打开）本单位的工作表里填写「加到多少」并选「确认」；本程序每隔几秒读取一次，按与手机端相同的规则处理，并把结果写回表格。
           </p>
-          <ol className="small" style={{ paddingLeft: 18, lineHeight: 1.8 }}>
-            <li>
-              下载<a href={`${base}/template.xlsx`}>填报表模板</a>，导入金山文档（或直接使用模拟金山文档演练）。
-            </li>
-            <li>
-              在该表格中打开 AirScript 脚本编辑器，粘贴<a href="/api/v1/admin/kdocs/airscript.js">同步脚本</a>，保存。
-            </li>
-            <li>生成「脚本令牌」，复制脚本的 webhook 链接，填到下方并保存。</li>
-            <li>「测试连接」→「初始化表格版式」→ 设置各工作表权限 → 「开启同步」。</li>
-          </ol>
+          <details className="small" style={{ marginBottom: 10 }} open={!b && !ov?.reusable}>
+            <summary style={{ cursor: 'pointer', fontWeight: 600 }}>第一次使用：在金山文档里准备（只需做一次，以后各场活动沿用）</summary>
+            <ol style={{ paddingLeft: 18, lineHeight: 1.8, margin: '6px 0 0' }}>
+              <li>
+                下载<a href={`${base}/template.xlsx`}>填报表模板</a>，在金山文档网页版「导入」成在线表格（不要改工作表名称）。
+              </li>
+              <li>
+                在该表格中打开 AirScript 脚本编辑器（一般在「效率」→「高级开发」），新建共享脚本，粘贴<a href="/api/v1/admin/kdocs/airscript.js">同步脚本</a>全文，保存。
+              </li>
+              <li>在脚本编辑器中生成「脚本令牌」；在脚本的「…」菜单中「复制 webhook 链接」。把两样粘贴到下面。</li>
+            </ol>
+          </details>
+
+          {ov?.reusable && (!b || b.webhookUrl !== ov.reusable.webhookUrl) && (
+            <div className="notice info" style={{ marginBottom: 10 }}>
+              <div>
+                <div>
+                  上次使用的金山表格：来自活动「{ov.reusable.eventName}」{ov.reusable.updatedAt ? `（${fmtTime(ov.reusable.updatedAt, true)}）` : ''}
+                </div>
+                <button className="btn btn-primary" style={{ marginTop: 8 }} disabled={busy} onClick={() => void connect({ reuse: true })}>
+                  沿用这张表格，一键连接
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="form-grid">
             <label className="field" style={{ gridColumn: '1 / -1' }}>
-              <span>脚本 webhook 链接</span>
+              <span>脚本 webhook 链接（可以把链接和令牌一起粘贴到这里）</span>
               <input
                 value={form.webhookUrl}
-                onChange={(e) => setForm({ ...form, webhookUrl: e.target.value })}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  const sp = splitPaste(v);
+                  if (sp && sp.url !== v.trim()) setForm({ ...form, webhookUrl: sp.url, token: sp.token || form.token });
+                  else setForm({ ...form, webhookUrl: v });
+                }}
                 placeholder="https://www.kdocs.cn/api/v3/ide/file/…/script/…/sync_task"
               />
             </label>
-            <label className="field">
+            <label className="field" style={{ gridColumn: '1 / -1' }}>
               <span>脚本令牌（AirScript-Token）{b ? `：已保存 ${b.tokenMasked}，留空不修改` : ''}</span>
               <input type="password" autoComplete="off" value={form.token} onChange={(e) => setForm({ ...form, token: e.target.value })} />
             </label>
-            <label className="field">
-              <span>同步间隔（秒）</span>
-              <input type="number" min={1} max={60} value={form.intervalSec} onChange={(e) => setForm({ ...form, intervalSec: Number(e.target.value) })} />
-            </label>
-            <label className="field">
-              <span>每家报价行数</span>
-              <input type="number" min={5} max={200} value={form.maxRows} onChange={(e) => setForm({ ...form, maxRows: Number(e.target.value) })} />
+          </div>
+          <div className="a-row" style={{ marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button className="btn btn-primary" disabled={busy || (!form.webhookUrl.trim() && !b)} onClick={() => void connect({})}>
+              {busy ? '连接中…' : '一键连接'}
+            </button>
+            <label className="small" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input type="checkbox" checked={enableAfter} onChange={(e) => setEnableAfter(e.target.checked)} />
+              连接后立即开启同步
             </label>
           </div>
-          <div className="a-row" style={{ marginTop: 10, flexWrap: 'wrap' }}>
-            <button className="btn" disabled={busy || !form.webhookUrl} onClick={() => void save()}>
-              保存配置
-            </button>
-            <button
-              className="btn"
-              disabled={busy || !b}
-              onClick={() =>
-                void run(
-                  () => api.post(`${base}/test`),
-                  (r) => `连接成功（${r.durationMs} 毫秒）。${r.missingUnits.length ? `缺少工作表：${r.missingUnits.join('、')}` : '16 家单位工作表齐全。'}`,
-                )
-              }
-            >
-              测试连接
-            </button>
-            <button
-              className="btn"
-              disabled={busy || !b}
-              title="写入标题、信息区标签、表头和序号；不会改动领导已填写的内容"
-              onClick={() => void run(() => api.post(`${base}/init-layout`, { clearInputs: false }), (r) => `已写入版式（${r.written} 处）${r.missingUnits.length ? `；缺少工作表：${r.missingUnits.join('、')}` : ''}`)}
-            >
-              初始化表格版式
-            </button>
-            {b?.enabled ? (
-              <button className="btn btn-danger" disabled={busy} onClick={() => void save(false)}>
-                停止同步
-              </button>
-            ) : (
-              <button className="btn btn-primary" disabled={busy || !b} onClick={() => void save(true)}>
-                开启同步
-              </button>
-            )}
-            {b?.enabled && (
-              <button className="btn" disabled={busy} onClick={() => void run(() => api.post(`${base}/sync-now`), () => '已立即同步')}>
-                立即同步
-              </button>
-            )}
-          </div>
+          {steps && (
+            <ul className="kd-steps">
+              {steps.map((x) => (
+                <li key={x.name} className={x.ok ? 'ok' : 'bad'}>
+                  <b>{x.ok ? '✔' : '✘'} {x.name}</b>
+                  <span>{x.detail}</span>
+                </li>
+              ))}
+            </ul>
+          )}
           {msg && (
             <div className={`notice ${msg.ok ? 'success' : ''}`} style={{ marginTop: 10 }}>
               {msg.text}
             </div>
           )}
+
+          <details style={{ marginTop: 14 }}>
+            <summary className="small" style={{ cursor: 'pointer' }}>
+              高级设置（同步间隔、报价行数、单独执行各步骤）
+            </summary>
+            <div className="form-grid" style={{ marginTop: 8 }}>
+              <label className="field">
+                <span>同步间隔（秒）</span>
+                <input type="number" min={1} max={60} value={form.intervalSec} onChange={(e) => setForm({ ...form, intervalSec: Number(e.target.value) })} />
+              </label>
+              <label className="field">
+                <span>每家报价行数</span>
+                <input type="number" min={5} max={200} value={form.maxRows} onChange={(e) => setForm({ ...form, maxRows: Number(e.target.value) })} />
+              </label>
+            </div>
+            <div className="a-row" style={{ marginTop: 10, flexWrap: 'wrap' }}>
+              <button className="btn" disabled={busy || (!form.webhookUrl && !b)} onClick={() => void save()}>
+                保存配置
+              </button>
+              <button
+                className="btn"
+                disabled={busy || !b}
+                onClick={() =>
+                  void run(
+                    () => api.post(`${base}/test`),
+                    (r) => `连接成功（${r.durationMs} 毫秒）。${r.missingUnits.length ? `缺少工作表：${r.missingUnits.join('、')}` : '16 家单位工作表齐全。'}`,
+                  )
+                }
+              >
+                测试连接
+              </button>
+              <button
+                className="btn"
+                disabled={busy || !b}
+                title="写入标题、信息区标签、表头和序号；不会改动领导已填写的内容"
+                onClick={() => void run(() => api.post(`${base}/init-layout`, { clearInputs: false }), (r) => `已写入版式（${r.written} 处）${r.missingUnits.length ? `；缺少工作表：${r.missingUnits.join('、')}` : ''}`)}
+              >
+                初始化表格版式
+              </button>
+            </div>
+          </details>
         </div>
 
         <div className="a-card">
@@ -295,6 +375,24 @@ export function KdocsTab({ eventId }: TabProps) {
                 </tr>
               </tbody>
             </table>
+          )}
+          {b && (
+            <div className="a-row" style={{ marginTop: 10, flexWrap: 'wrap' }}>
+              {b.enabled ? (
+                <button className="btn btn-danger" disabled={busy} onClick={() => void save(false)}>
+                  停止同步
+                </button>
+              ) : (
+                <button className="btn btn-primary" disabled={busy} onClick={() => void save(true)}>
+                  开启同步
+                </button>
+              )}
+              {b.enabled && (
+                <button className="btn" disabled={busy} onClick={() => void run(() => api.post(`${base}/sync-now`), () => '已立即同步')}>
+                  立即同步
+                </button>
+              )}
+            </div>
           )}
           <p className="small muted">结束本组、暂停、锁定前，系统会先自动读取一次表格，把最后几秒的填写读进来。</p>
         </div>

@@ -3,7 +3,7 @@ import ExcelJS from 'exceljs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { KdocsError, callScript, normalizeWebhookUrl } from '../src/services/kdocs/client';
 import { MockWorkbook, runAirScript } from '../src/services/kdocs/mock';
-import { type Ctx, call, control, createFormalEvent, fullRows, goLive, importRows, publish, setup } from './helpers';
+import { type Ctx, FULL_CONFIG as FULL, call, control, createFormalEvent, fullRows, goLive, importRows, publish, setup } from './helpers';
 
 let ctx: Ctx;
 beforeAll(async () => {
@@ -313,5 +313,76 @@ describe('通过金山文档竞标', () => {
     const t = await call(ctx.app, 'POST', api(eventId, '/test'), { cookie: ctx.adminCookie, body: {} });
     expect(t.status).toBe(422);
     expect(t.body.error.message).toContain('AirScript-Token 无效');
+  });
+});
+
+describe('一键连接', () => {
+  const connect = (eventId: string, body: object) => call(ctx.app, 'POST', api(eventId, '/connect'), { cookie: ctx.adminCookie, body });
+
+  it('粘贴链接和令牌一键完成：保存 → 测试连接 → 写入版式 → 开启同步', async () => {
+    const { eventId: a, fileId } = await prepared({ enable: false });
+    const url = (await call(ctx.app, 'GET', api(a), { cookie: ctx.adminCookie })).body.binding.webhookUrl;
+    // 新活动直接粘贴同一个链接和令牌
+    const b = await createFormalEvent(ctx, { ...FULL, name: '一键连接测试' });
+    const r = await connect(b, { webhookUrl: url, token: mock().token });
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+    expect(r.body.steps.map((x: any) => [x.name, x.ok])).toEqual([
+      ['保存链接与令牌', true],
+      ['测试连接', true],
+      ['写入表格版式', true],
+      ['开启同步', true],
+    ]);
+    expect(r.body.overview.binding.enabled).toBe(true);
+    expect(cell(fileId, '浦东', 'A1')).toBe('浦东 · 一键连接测试');
+  });
+
+  it('同一张表格改由新活动同步时，旧活动的同步自动停止', async () => {
+    const { eventId: a } = await prepared();
+    const url = (await call(ctx.app, 'GET', api(a), { cookie: ctx.adminCookie })).body.binding.webhookUrl;
+    const b = await createFormalEvent(ctx, { ...FULL, name: '新活动' });
+    const r = await connect(b, { webhookUrl: url, token: mock().token });
+    expect(r.body.steps.at(-1).detail).toContain('同步已自动停止');
+    const oa = await call(ctx.app, 'GET', api(a), { cookie: ctx.adminCookie });
+    expect(oa.body.binding.enabled).toBe(false);
+    expect(ctx.kdocs.sync.isActive(a)).toBe(false);
+    expect(ctx.kdocs.sync.isActive(b)).toBe(true);
+    await call(ctx.app, 'PUT', api(b), { cookie: ctx.adminCookie, body: { enabled: false } });
+  });
+
+  it('逐项报告失败原因：令牌错误、缺少工作表', async () => {
+    const { eventId, fileId } = await prepared({ enable: false });
+    const bad = await connect(eventId, { token: 'wrong-token-1234' });
+    expect(bad.body.ok).toBe(false);
+    expect(bad.body.steps.map((x: any) => x.ok)).toEqual([true, false]);
+    expect(bad.body.steps[1].detail).toContain('AirScript-Token 无效');
+    const wb = mock().file(fileId)!;
+    wb.sheets.splice(wb.sheets.findIndex((x) => x.Name === '崇明'), 1);
+    const miss = await connect(eventId, { token: mock().token });
+    expect(miss.body.steps[1].detail).toContain('缺少工作表：崇明');
+    expect(miss.body.overview.binding.enabled).toBe(false);
+  });
+
+  it('沿用上次的金山表格：复制其他活动最近使用的链接与令牌（不含模拟）', async () => {
+    const a = await createFormalEvent(ctx, { ...FULL, name: '上次的活动' });
+    await ctx.db.query(
+      `INSERT INTO kdocs_bindings (event_id, webhook_url, token, interval_sec, max_rows, updated_at)
+       VALUES ($1, 'https://www.kdocs.cn/api/v3/ide/file/realfile1/script/realscript1/sync_task', 'real-token-abcd', 5, 30, now() + interval '1 hour')`,
+      [a],
+    );
+    const b = await createFormalEvent(ctx, { ...FULL, name: '本次活动' });
+    const o = await call(ctx.app, 'GET', api(b), { cookie: ctx.adminCookie });
+    expect(o.body.reusable).toMatchObject({ eventName: '上次的活动' });
+    expect(JSON.stringify(o.body.reusable)).not.toContain('real-token');
+    const r = await connect(b, { reuse: true, enable: false });
+    expect(r.body.steps[0]).toMatchObject({ ok: true, detail: '已沿用上次的金山表格' });
+    const row = await ctx.db.query('SELECT webhook_url, token, interval_sec, max_rows FROM kdocs_bindings WHERE event_id = $1', [b]);
+    expect(row.rows[0]).toEqual({
+      webhook_url: 'https://www.kdocs.cn/api/v3/ide/file/realfile1/script/realscript1/sync_task',
+      token: 'real-token-abcd',
+      interval_sec: 5,
+      max_rows: 30,
+    });
+    await ctx.db.query('DELETE FROM kdocs_bindings WHERE event_id IN ($1, $2)', [a, b]);
   });
 });

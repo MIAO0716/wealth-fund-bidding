@@ -47,14 +47,20 @@ test('领导在（模拟）金山文档中填写：确认底标 → 加码生效
     data: { action: 'START', groupNo: 1, expectedControlVersion: st.projects.wealth.controlVersion, idempotencyKey: `start-${eventId}` },
   });
 
-  // 管理端：使用模拟金山文档 → 开启同步（间隔 1 秒）
+  // 管理端：使用模拟金山文档 → 高级设置中把同步间隔改为 1 秒 → 一键连接
   const page = await admin.newPage();
   await page.goto(`/admin/events/${eventId}/kdocs`);
   await page.getByRole('button', { name: '使用模拟金山文档' }).click();
   await expect(page.getByText('已切换到模拟金山文档')).toBeVisible();
+  await page.getByText('高级设置（同步间隔、报价行数、单独执行各步骤）').click();
   await page.getByLabel('同步间隔（秒）').fill('1');
-  await page.getByRole('button', { name: '开启同步' }).click();
-  await expect(page.getByText('同步中')).toBeVisible();
+  await page.getByRole('button', { name: '保存配置' }).click();
+  await expect(page.locator('.notice.success', { hasText: '已保存' })).toBeVisible();
+  await page.getByRole('button', { name: '一键连接' }).click();
+  for (const step of ['保存链接与令牌', '测试连接', '写入表格版式', '开启同步']) {
+    await expect(page.locator('.kd-steps li.ok', { hasText: step })).toBeVisible({ timeout: 15_000 });
+  }
+  await expect(page.locator('.chip', { hasText: '同步中' })).toBeVisible();
   const mockHref = await page.getByRole('link', { name: '打开模拟表格（领导填写页）' }).getAttribute('href');
   const fileId = new URL(mockHref!, baseURL).searchParams.get('file')!;
 

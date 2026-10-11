@@ -50,6 +50,7 @@ export async function getKdocsOverview(d: KdocsDeps, eventId: string) {
     binding: bindingView(b),
     status: d.sync.status(eventId),
     mockAvailable: !!d.mock,
+    reusable: await reusableBinding(d, eventId),
     counts: Object.fromEntries(counts.rows.map((r) => [r.status, r.n])),
     rows: rows.rows.map((r) => ({
       unitCode: r.unit_code,
@@ -115,13 +116,134 @@ export async function saveKdocsBinding(
       }),
     );
   }
+  // 同一张表格只能由一个活动同步：开启本活动时停止其他活动对这张表格的同步
+  const stoppedEvents: string[] = [];
+  if (enabled) {
+    const others = await d.ctx.db.query(
+      `UPDATE kdocs_bindings SET enabled = false, updated_at = now()
+        WHERE webhook_url = $1 AND event_id <> $2 AND enabled
+        RETURNING event_id`,
+      [webhookUrl, eventId],
+    );
+    for (const o of others.rows) {
+      const ev = await getEventRow(d.ctx.db, o.event_id);
+      stoppedEvents.push(String((ev.config as { name?: string }).name || '（未命名活动）'));
+      await withTx(d.ctx.db, (tx) => audit(tx, o.event_id, actor, 'KDOCS_SYNC_OFF', { reason: '同一张金山表格已改由其他活动同步', details: { toEventId: eventId } }));
+      await d.sync.refresh(o.event_id);
+    }
+  }
   if (d.mock && isMockUrl(webhookUrl)) {
     const fileId = /\/file\/([^/]+)\//.exec(webhookUrl)?.[1];
     const wb = fileId ? d.mock.file(fileId) : undefined;
     if (wb) wb.maxRows = maxRows;
   }
   await d.sync.refresh(eventId);
-  return getKdocsOverview(d, eventId);
+  return { ...(await getKdocsOverview(d, eventId)), stoppedEvents };
+}
+
+/** 其他活动最近使用过的真实金山表格（不含模拟），用于新活动「沿用上次的金山表格」 */
+async function reusableBinding(d: KdocsDeps, eventId: string) {
+  const r = await d.ctx.db.query(
+    `SELECT b.event_id, b.webhook_url, b.updated_at, e.config
+       FROM kdocs_bindings b JOIN events e ON e.id = b.event_id
+      WHERE b.event_id <> $1 AND b.webhook_url NOT LIKE '%/mock-kdocs/%'
+      ORDER BY b.updated_at DESC LIMIT 1`,
+    [eventId],
+  );
+  const row = r.rows[0];
+  if (!row) return null;
+  return {
+    eventId: row.event_id as string,
+    eventName: String((row.config as { name?: string }).name || '（未命名活动）'),
+    webhookUrl: row.webhook_url as string,
+    updatedAt: toIso(row.updated_at),
+  };
+}
+
+export interface ConnectStep {
+  name: string;
+  ok: boolean;
+  detail: string;
+}
+
+/**
+ * 一键连接：保存 → 测试连接（16 张工作表齐全）→ 写入表格版式 → 开启同步，逐项返回结果，任一步失败即停止。
+ * reuse=true 时沿用其他活动最近使用的金山表格（链接与令牌）。
+ */
+export async function connectKdocs(
+  d: KdocsDeps,
+  eventId: string,
+  actor: Actor,
+  body: { webhookUrl?: unknown; token?: unknown; reuse?: unknown; enable?: unknown },
+) {
+  if (d.ctx.config.readOnly) throw bizError('READ_ONLY');
+  const steps: ConnectStep[] = [];
+  const enable = body.enable !== false;
+  const existing = await d.sync.binding(eventId);
+
+  let source: { webhookUrl?: unknown; token?: unknown; intervalSec?: number; maxRows?: number } = { webhookUrl: body.webhookUrl, token: body.token };
+  if (body.reuse === true) {
+    const r = await d.ctx.db.query(
+      `SELECT webhook_url, token, interval_sec, max_rows FROM kdocs_bindings
+        WHERE event_id <> $1 AND webhook_url NOT LIKE '%/mock-kdocs/%' ORDER BY updated_at DESC LIMIT 1`,
+      [eventId],
+    );
+    if (!r.rowCount) throw bizError('BAD_REQUEST', '没有可以沿用的金山表格，请粘贴 webhook 链接和脚本令牌');
+    const row = r.rows[0];
+    source = { webhookUrl: row.webhook_url, token: row.token, intervalSec: row.interval_sec, maxRows: row.max_rows };
+  }
+  const webhookGiven = typeof source.webhookUrl === 'string' && source.webhookUrl.trim() !== '';
+  const keepRunning = !!existing?.enabled && (!webhookGiven || existing.webhook_url === String(source.webhookUrl).trim());
+
+  // 1. 保存（换表格时先停止同步，测试通过后再开启）
+  try {
+    await saveKdocsBinding(d, eventId, actor, {
+      ...(webhookGiven ? { webhookUrl: source.webhookUrl } : {}),
+      token: source.token,
+      ...(source.intervalSec ? { intervalSec: source.intervalSec } : {}),
+      ...(source.maxRows ? { maxRows: source.maxRows } : {}),
+      enabled: keepRunning,
+    });
+    steps.push({ name: '保存链接与令牌', ok: true, detail: body.reuse === true ? '已沿用上次的金山表格' : '已保存' });
+  } catch (e) {
+    steps.push({ name: '保存链接与令牌', ok: false, detail: (e as Error).message });
+    return { ok: false, steps, overview: await getKdocsOverview(d, eventId) };
+  }
+
+  // 2. 测试连接
+  try {
+    const t = (await testKdocs(d, eventId))!;
+    if (t.missingUnits.length) {
+      steps.push({ name: '测试连接', ok: false, detail: `已连上，但缺少工作表：${t.missingUnits.join('、')}。请确认导入的是管理端下载的模板，且工作表名称未修改` });
+      return { ok: false, steps, overview: await getKdocsOverview(d, eventId) };
+    }
+    steps.push({ name: '测试连接', ok: true, detail: `连接成功（${t.durationMs} 毫秒），16 家单位工作表齐全` });
+  } catch (e) {
+    steps.push({ name: '测试连接', ok: false, detail: (e as Error).message });
+    return { ok: false, steps, overview: await getKdocsOverview(d, eventId) };
+  }
+
+  // 3. 写入版式（不改动领导已填写的内容）
+  try {
+    const r = (await initKdocsLayout(d, eventId, actor, { clearInputs: false }))!;
+    steps.push({ name: '写入表格版式', ok: true, detail: `已写入标题、标签、表头与序号（${r.written} 处）` });
+  } catch (e) {
+    steps.push({ name: '写入表格版式', ok: false, detail: (e as Error).message });
+    return { ok: false, steps, overview: await getKdocsOverview(d, eventId) };
+  }
+
+  // 4. 开启同步
+  if (enable) {
+    try {
+      const r = await saveKdocsBinding(d, eventId, actor, { enabled: true });
+      const extra = r.stoppedEvents.length ? `；这张表格在「${r.stoppedEvents.join('」「')}」上的同步已自动停止` : '';
+      steps.push({ name: '开启同步', ok: true, detail: (keepRunning ? '同步保持开启' : '已开启同步') + extra });
+    } catch (e) {
+      steps.push({ name: '开启同步', ok: false, detail: (e as Error).message });
+      return { ok: false, steps, overview: await getKdocsOverview(d, eventId) };
+    }
+  }
+  return { ok: true, steps, overview: await getKdocsOverview(d, eventId) };
 }
 
 async function requireBinding(d: KdocsDeps, eventId: string): Promise<KdocsBindingRow> {

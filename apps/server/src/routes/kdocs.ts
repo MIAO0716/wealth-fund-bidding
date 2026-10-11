@@ -3,7 +3,7 @@ import type { AppDeps } from '../app';
 import { bizError } from '../lib/errors';
 import { actorOf } from '../services/auth';
 import { getEventRow } from '../services/events';
-import { getKdocsOverview, initKdocsLayout, saveKdocsBinding, testKdocs, useKdocsMock } from '../services/kdocs/admin';
+import { connectKdocs, getKdocsOverview, initKdocsLayout, saveKdocsBinding, testKdocs, useKdocsMock } from '../services/kdocs/admin';
 import { AIRSCRIPT_SOURCE } from '../services/kdocs/airscript';
 import { buildKdocsTemplate } from '../services/kdocs/template';
 
@@ -28,6 +28,8 @@ export function registerKdocsAdminRoutes(api: FastifyInstance, deps: AppDeps): v
   api.get<{ Params: P }>('/admin/events/:eventId/kdocs', auth, async (req) => getKdocsOverview(kdocs, req.params.eventId));
 
   api.put<{ Params: P }>('/admin/events/:eventId/kdocs', auth, async (req) => saveKdocsBinding(kdocs, req.params.eventId, actor(req), body(req)));
+
+  api.post<{ Params: P }>('/admin/events/:eventId/kdocs/connect', auth, async (req) => connectKdocs(kdocs, req.params.eventId, actor(req), body(req)));
 
   api.post<{ Params: P }>('/admin/events/:eventId/kdocs/test', auth, async (req) => testKdocs(kdocs, req.params.eventId));
 

@@ -1609,3 +1609,28 @@ textarea {
   font-size: 12px;
   padding: 0 16px 24px;
 }
+
+/* 金山文档一键连接：逐项结果 */
+.kd-steps {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+  display: grid;
+  gap: 6px;
+}
+.kd-steps li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  font-size: 14px;
+}
+.kd-steps li.ok b {
+  color: var(--ok);
+}
+.kd-steps li.bad b {
+  color: var(--red);
+}
+.kd-steps li span {
+  color: var(--muted);
+}
