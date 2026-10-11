@@ -1,5 +1,5 @@
 /**
- * 金山文档同步：每隔几秒调用一次 AirScript，读取各单位工作表中领导填写的内容，
+ * 金山文档同步：工作人员点「读取金山表格」时（或开启自动定时读取时）调用一次 AirScript，读取各单位工作表中领导填写的内容，
  * 按与手机端完全相同的规则处理（submitBid / acknowledgeBase），再把结果写回表格。
  *
  * 关键约定（详见《金山文档接入说明》）：
@@ -49,6 +49,19 @@ export interface KdocsBindingRow {
   updated_at: Date;
   /** 每家单位一个文件：单位代码 → 文件链接；为空表示一个文件 16 张工作表 */
   unit_files: Record<string, string> | null;
+  /** 自动定时读取（默认关闭：手动点「读取金山表格」） */
+  auto_sync: boolean;
+}
+
+/** 一次读取的结果摘要 */
+export interface KdocsReadSummary {
+  at: string;
+  applied: number;
+  rejected: number;
+  acked: number;
+  /** 本次有新处理内容的单位 */
+  units: string[];
+  durationMs: number;
 }
 
 /**
@@ -79,8 +92,11 @@ export interface KdocsStatus {
   baselineDone: boolean;
   /** 当前同步节奏；null 表示尚未判断 */
   pace: KdocsPace | null;
-  /** 下一次自动同步的时间；null 表示不再自动同步 */
+  /** 下一次自动同步的时间；null 表示不再自动同步（手动读取时始终为 null） */
   nextSyncAt: string | null;
+  autoSync: boolean;
+  /** 最近一次成功读取的结果 */
+  lastRead: KdocsReadSummary | null;
 }
 
 type MeSnapshot = Awaited<ReturnType<typeof bidderMe>>;
@@ -159,6 +175,7 @@ class EventSync {
   private ackPrompt = new Map<string, { project: ProjectCode; sentCall: number | null }>();
   private ackErrors = new Map<string, string>();
   private consumed: Map<string, ConsumedRow> | null = null;
+  private stats = { applied: 0, rejected: 0, acked: 0, units: new Set<string>() };
   private lastSeq = -1;
   private lastStampAt = 0;
   private dirty = true;
@@ -186,11 +203,23 @@ class EventSync {
       baselineDone: binding.baseline_done,
       pace: null,
       nextSyncAt: null,
+      autoSync: binding.auto_sync,
+      lastRead: null,
     };
   }
 
+  /** 开启时读取一次（标记「开始同步前已填写」）；手动模式之后不再自动读取 */
   start(): void {
-    this.schedule(0);
+    if (this.binding.auto_sync || !this.binding.baseline_done) this.schedule(0);
+  }
+
+  /** 配置变化（同一张表格）：更新间隔、令牌、自动/手动 */
+  rebind(b: KdocsBindingRow): void {
+    const wasAuto = this.binding.auto_sync;
+    this.binding = b;
+    this.status.autoSync = b.auto_sync;
+    if (b.auto_sync && !wasAuto) this.schedule(0);
+    if (!b.auto_sync && wasAuto) this.schedule(null);
   }
 
   stop(): void {
@@ -216,6 +245,8 @@ class EventSync {
   }
 
   private nextDelay(): number | null {
+    // 手动读取：不安排任何自动读取（失败也不自动重试）
+    if (!this.binding.auto_sync) return null;
     const base = this.binding.interval_sec * 1000;
     const f = this.status.consecutiveFailures;
     if (f > 0) return Math.min(base * 2 ** Math.min(f, 5), 60_000);
@@ -259,6 +290,7 @@ class EventSync {
     const started = Date.now();
     const eventId = this.binding.event_id;
     const maxRows = this.binding.max_rows;
+    this.stats = { applied: 0, rejected: 0, acked: 0, units: new Set<string>() };
     try {
       if (!this.consumed) this.consumed = await this.loadConsumed();
 
@@ -293,6 +325,14 @@ class EventSync {
       if (this.oneShot.length || this.pendingWrites().length) await this.send([]);
 
       this.status.pace = await this.currentPace();
+      this.status.lastRead = {
+        at: new Date().toISOString(),
+        applied: this.stats.applied,
+        rejected: this.stats.rejected,
+        acked: this.stats.acked,
+        units: UNITS.filter((u) => this.stats.units.has(u.code)).map((u) => u.name),
+        durationMs: Date.now() - started,
+      };
       this.status.state = 'RUNNING';
       this.status.lastOkAt = new Date().toISOString();
       this.status.consecutiveFailures = 0;
@@ -418,6 +458,9 @@ class EventSync {
       message: rec.message,
       seenAt: r.rows[0]?.first_seen_at ?? new Date(),
     });
+    if (rec.status === 'APPLIED') this.stats.applied++;
+    if (rec.status === 'REJECTED') this.stats.rejected++;
+    if (rec.status !== 'PREEXISTING') this.stats.units.add(unit.code);
     this.dirty = true;
   }
 
@@ -453,6 +496,8 @@ class EventSync {
         try {
           await acknowledgeBase(this.ctx, eventId, kdocsActor(unit), project, unit.code, { idempotencyKey: `kdack:${unit.code}:${project}:${eventId.slice(0, 8)}` }, { channel: 'KDOCS' });
           this.ackErrors.delete(unit.code);
+          this.stats.acked++;
+          this.stats.units.add(unit.code);
         } catch (e) {
           if (!(e instanceof BizError)) throw e;
           this.ackErrors.set(unit.code, e.message);
@@ -699,7 +744,7 @@ export class KdocsSyncManager {
       existing.binding.max_rows === b.max_rows &&
       JSON.stringify(existing.binding.unit_files) === JSON.stringify(b.unit_files)
     ) {
-      existing.binding = b;
+      existing.rebind(b);
       return;
     }
     existing?.stop();

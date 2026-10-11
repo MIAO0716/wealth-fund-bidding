@@ -1,5 +1,6 @@
 import { LEADER_STATUS_LABELS, PROJECT_STATUS_NAMES, type LiveRow, type ProjectCode, type ScreenMode } from '@bidding/shared';
 import { useEffect, useState } from 'react';
+import { KdocsReadBar } from '../../components/KdocsRead';
 import { Modal } from '../../components/ui';
 import { api, errorText, newIdempotencyKey } from '../../lib/api';
 import { fmtTime, previewTargetWan, wan2 } from '../../lib/format';
@@ -85,6 +86,7 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
 
   return (
     <>
+      <KdocsReadBar eventId={eventId} compact onRead={reload} />
       <div className="a-row" style={{ marginBottom: 12 }}>
         {(['wealth', 'fund'] as ProjectCode[]).map((c) => (
           <button key={c} className={`btn ${c === project ? 'btn-primary' : ''}`} onClick={() => setProject(c)}>

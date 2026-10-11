@@ -1,5 +1,6 @@
 import { UNITS, parseUnitFiles } from '@bidding/shared';
 import { useEffect, useMemo, useState } from 'react';
+import { KdocsReadBar } from '../../components/KdocsRead';
 import { api, errorText } from '../../lib/api';
 import { fmtTime } from '../../lib/format';
 import type { TabProps } from './EventPage';
@@ -15,6 +16,7 @@ interface Overview {
     enabledAt: string | null;
     isMock: boolean;
     mode: 'files' | 'single';
+    autoSync: boolean;
     unitFiles: Array<{ unitCode: string; unitName: string; url: string | null }> | null;
   } | null;
   status: {
@@ -76,7 +78,7 @@ const STATUS_CHIP: Record<string, [string, string]> = {
 export function KdocsTab({ eventId }: TabProps) {
   const base = `/api/v1/admin/events/${eventId}/kdocs`;
   const [ov, setOv] = useState<Overview | null>(null);
-  const [form, setForm] = useState({ webhookUrl: '', token: '', intervalSec: 3, maxRows: 40 });
+  const [form, setForm] = useState({ webhookUrl: '', token: '', intervalSec: 3, maxRows: 40, autoSync: false });
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [steps, setSteps] = useState<ConnectResult['steps'] | null>(null);
@@ -102,7 +104,7 @@ export function KdocsTab({ eventId }: TabProps) {
   useEffect(() => {
     void load().then((o) => {
       if (o && o.binding) {
-        setForm({ webhookUrl: o.binding.webhookUrl, token: '', intervalSec: o.binding.intervalSec, maxRows: o.binding.maxRows });
+        setForm({ webhookUrl: o.binding.webhookUrl, token: '', intervalSec: o.binding.intervalSec, maxRows: o.binding.maxRows, autoSync: o.binding.autoSync });
         syncFromBinding(o.binding);
       }
     });
@@ -133,13 +135,14 @@ export function KdocsTab({ eventId }: TabProps) {
           ...(form.webhookUrl.trim() ? { webhookUrl: form.webhookUrl.trim() } : {}),
           ...(form.token.trim() ? { token: form.token.trim() } : {}),
           intervalSec: Number(form.intervalSec),
+          autoSync: form.autoSync,
           maxRows: Number(form.maxRows),
           ...(enabled !== undefined ? { enabled } : {}),
         }),
       (r: { stoppedEvents?: string[] }) => {
         setForm((f) => ({ ...f, token: '' }));
         const stopped = r.stoppedEvents?.length ? `；这张表格在「${r.stoppedEvents.join('」「')}」上的同步已自动停止` : '';
-        return (enabled === true ? '已开启同步' : enabled === false ? '已停止同步' : '已保存') + stopped;
+        return (enabled === true ? '已启用读取' : enabled === false ? '已停用读取' : '已保存') + stopped;
       },
     );
 
@@ -171,8 +174,8 @@ export function KdocsTab({ eventId }: TabProps) {
           ok: true,
           text: enableAfter
             ? mode === 'files'
-              ? '已连接并开启同步。下一步：把 16 个单位文件分别只分享给对应单位的领导。'
-              : '已连接并开启同步。下一步：在金山文档中给各单位工作表设置权限，并分享给领导。'
+              ? '已连接。下一步：把 16 个单位文件分别只分享给对应单位的领导。现场看到表格有人填写后，点「读取金山表格」。'
+              : '已连接。下一步：在金山文档中给各单位工作表设置权限，并分享给领导。现场看到表格有人填写后，点「读取金山表格」。'
             : '已连接。',
         });
     } catch (e) {
@@ -196,7 +199,7 @@ export function KdocsTab({ eventId }: TabProps) {
         <div className="a-card">
           <h3>一键连接金山文档</h3>
           <p className="small muted" style={{ marginTop: 0 }}>
-            领导在金山文档（微信内打开）本单位的工作表里填写「加到多少」并选「确认」；本程序每隔几秒读取一次，按与手机端相同的规则处理，并把结果写回表格。
+            领导在金山文档（微信内打开）本单位的工作表里填写「加到多少」并选「确认」；工作人员看到有人填写后点「读取金山表格」，程序读取一次，按与手机端相同的规则处理，并把结果写回表格。
           </p>
           <div className="kd-mode">
             <label className={mode === 'files' ? 'on' : ''}>
@@ -298,7 +301,7 @@ export function KdocsTab({ eventId }: TabProps) {
             </button>
             <label className="small" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <input type="checkbox" checked={enableAfter} onChange={(e) => setEnableAfter(e.target.checked)} />
-              连接后立即开启同步
+              连接后立即启用读取
             </label>
           </div>
           {steps && (
@@ -322,8 +325,12 @@ export function KdocsTab({ eventId }: TabProps) {
               高级设置（同步间隔、报价行数、单独执行各步骤）
             </summary>
             <div className="form-grid" style={{ marginTop: 8 }}>
+              <label className="field" style={{ gridColumn: '1 / -1', flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <input type="checkbox" checked={form.autoSync} onChange={(e) => setForm({ ...form, autoSync: e.target.checked })} style={{ width: 'auto' }} />
+                <span>自动定时读取（不推荐：会频繁调用金山文档。开启后：有组竞标时按同步间隔，等待/组间/暂停每 10 秒，首轮未发布每 30 秒）</span>
+              </label>
               <label className="field">
-                <span>同步间隔（秒）</span>
+                <span>同步间隔（秒，仅自动定时读取时使用）</span>
                 <input type="number" min={1} max={60} value={form.intervalSec} onChange={(e) => setForm({ ...form, intervalSec: Number(e.target.value) })} />
               </label>
               <label className="field">
@@ -378,7 +385,7 @@ export function KdocsTab({ eventId }: TabProps) {
                           setForm((f) => ({ ...f, webhookUrl: r.binding!.webhookUrl, token: '' }));
                           syncFromBinding(r.binding);
                         }
-                        return '已切换到模拟金山文档并写好版式，可以「开启同步」了';
+                        return '已切换到模拟金山文档并写好版式，可以「一键连接」了';
                       },
                     )
                   }
@@ -404,8 +411,8 @@ export function KdocsTab({ eventId }: TabProps) {
             </>
           )}
           <p className="small muted">
-            同一张表格反复测试：新建一个演示活动，绑定同一个链接；首次开启同步时，表格里已有的报价行会标记为「开始同步前已填写」，不参与新活动。
-            也可以先停止同步，再清空各单位的填写区。
+            同一张表格反复测试：新建一个演示活动，沿用同一张表格；首次启用时，表格里已有的报价行会标记为「开始同步前已填写」，不参与新活动。
+            也可以先停用读取，再清空各单位的填写区。
           </p>
           <button
             className="btn btn-danger"
@@ -415,14 +422,15 @@ export function KdocsTab({ eventId }: TabProps) {
               void run(() => api.post(`${base}/init-layout`, { clearInputs: true }), () => '已清空填写区并重写版式');
             }}
           >
-            清空表格填写区（需先停止同步）
+            清空表格填写区（需先停用读取）
           </button>
         </div>
       </div>
 
       <div>
         <div className="a-card">
-          <h3>同步状态</h3>
+          <h3>读取状态</h3>
+          {b?.enabled && <KdocsReadBar eventId={eventId} onRead={() => void load()} />}
           {!b ? (
             <p className="muted">尚未配置</p>
           ) : (
@@ -432,13 +440,13 @@ export function KdocsTab({ eventId }: TabProps) {
                   <td>状态</td>
                   <td>
                     {!b.enabled ? (
-                      <span className="chip grey">未开启</span>
+                      <span className="chip grey">未启用</span>
                     ) : st?.state === 'ERROR' ? (
                       <span className="chip red">异常</span>
                     ) : st?.state === 'READ_ONLY' ? (
-                      <span className="chip gold">只读维护中，暂停同步</span>
+                      <span className="chip gold">只读维护中，暂停读取</span>
                     ) : (
-                      <span className="chip green">同步中</span>
+                      <span className="chip green">{b.autoSync ? '已启用 · 自动定时读取' : '已启用 · 手动读取'}</span>
                     )}
                     {b.isMock && <span className="chip gold" style={{ marginLeft: 6 }}>模拟金山文档</span>}
                   </td>
@@ -464,7 +472,7 @@ export function KdocsTab({ eventId }: TabProps) {
                     <td style={{ color: 'var(--red)' }}>{st.missingUnits.join('、')}</td>
                   </tr>
                 )}
-                {b.enabled && st?.pace && (
+                {b.enabled && b.autoSync && st?.pace && (
                   <tr>
                     <td>同步节奏</td>
                     <td>
@@ -492,23 +500,18 @@ export function KdocsTab({ eventId }: TabProps) {
             <div className="a-row" style={{ marginTop: 10, flexWrap: 'wrap' }}>
               {b.enabled ? (
                 <button className="btn btn-danger" disabled={busy} onClick={() => void save(false)}>
-                  停止同步
+                  停用读取
                 </button>
               ) : (
                 <button className="btn btn-primary" disabled={busy} onClick={() => void save(true)}>
-                  开启同步
-                </button>
-              )}
-              {b.enabled && (
-                <button className="btn" disabled={busy} onClick={() => void run(() => api.post(`${base}/sync-now`), () => '已立即同步')}>
-                  立即同步
+                  启用读取
                 </button>
               )}
             </div>
           )}
           <p className="small muted">
-            按需同步：只有某组正在竞标时才频繁读取，其余时间放慢，以减少对金山文档的调用次数；发布首轮、开始、开放/结束本组、暂停、恢复、锁定后会立即读取一次。
-            结束本组、暂停、锁定前，系统会先自动读取一次表格，把最后几秒的填写读进来。
+            默认手动读取：领导在金山表格中填写后，工作人员点「读取金山表格」读取一次并处理（「现场控制」页面顶部也有这个按钮）。
+            为了不漏掉最后几秒的填写，结束本组、暂停、锁定前会先自动读取一次；发布首轮、开始、开放/结束本组、暂停、恢复、锁定后也会读取一次，把最新状态写到领导表格。
           </p>
         </div>
 

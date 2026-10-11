@@ -1668,3 +1668,24 @@ textarea {
   margin-top: 10px;
   align-items: center;
 }
+.kd-read {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--red);
+  border-radius: 10px;
+  background: #fff;
+  margin-bottom: 12px;
+}
+.kd-read .btn {
+  font-size: 16px;
+  padding: 10px 18px;
+}
+.kd-read-info {
+  display: grid;
+  gap: 2px;
+  font-size: 14px;
+}

@@ -36,6 +36,7 @@ export function bindingView(b: KdocsBindingRow | null) {
     updatedAt: toIso(b.updated_at),
     isMock: isMockUrl(b.webhook_url),
     mode: b.unit_files ? ('files' as const) : ('single' as const),
+    autoSync: b.auto_sync,
     unitFiles: b.unit_files
       ? UNITS.map((u) => ({ unitCode: u.code, unitName: u.name, url: b.unit_files![u.code] ?? null }))
       : null,
@@ -82,7 +83,7 @@ export async function saveKdocsBinding(
   d: KdocsDeps,
   eventId: string,
   actor: Actor,
-  body: { webhookUrl?: unknown; token?: unknown; intervalSec?: unknown; maxRows?: unknown; enabled?: unknown; unitFiles?: unknown },
+  body: { webhookUrl?: unknown; token?: unknown; intervalSec?: unknown; maxRows?: unknown; enabled?: unknown; unitFiles?: unknown; autoSync?: unknown },
 ) {
   if (d.ctx.config.readOnly) throw bizError('READ_ONLY');
   await getEventRow(d.ctx.db, eventId);
@@ -105,6 +106,7 @@ export async function saveKdocsBinding(
   const maxRows = body.maxRows === undefined ? (existing?.max_rows ?? KDOCS_LAYOUT.defaultBidRows) : Number(body.maxRows);
   if (!Number.isInteger(maxRows) || maxRows < 5 || maxRows > 200) throw bizError('BAD_REQUEST', '报价行数须为 5–200');
   const enabled = body.enabled === undefined ? (existing?.enabled ?? false) : body.enabled === true;
+  const autoSync = body.autoSync === undefined ? (existing?.auto_sync ?? false) : body.autoSync === true;
   // 每家单位一个文件：解析「单位 链接」清单；传空字符串或 null 表示一个文件 16 张工作表
   let unitFiles: Record<string, string> | null = existing?.unit_files ?? null;
   if (body.unitFiles !== undefined) {
@@ -123,15 +125,15 @@ export async function saveKdocsBinding(
   const docChanged = !existing || existing.webhook_url !== webhookUrl || JSON.stringify(existing.unit_files) !== JSON.stringify(unitFiles);
 
   await d.ctx.db.query(
-    `INSERT INTO kdocs_bindings (event_id, webhook_url, token, interval_sec, max_rows, enabled, baseline_done, enabled_at, updated_at, unit_files)
-     VALUES ($1, $2, $3, $4, $5, $6, false, CASE WHEN $6 THEN now() END, now(), $8)
+    `INSERT INTO kdocs_bindings (event_id, webhook_url, token, interval_sec, max_rows, enabled, baseline_done, enabled_at, updated_at, unit_files, auto_sync)
+     VALUES ($1, $2, $3, $4, $5, $6, false, CASE WHEN $6 THEN now() END, now(), $8, $9)
      ON CONFLICT (event_id) DO UPDATE SET
        webhook_url = EXCLUDED.webhook_url, token = EXCLUDED.token, interval_sec = EXCLUDED.interval_sec,
-       max_rows = EXCLUDED.max_rows, enabled = EXCLUDED.enabled, unit_files = EXCLUDED.unit_files,
+       max_rows = EXCLUDED.max_rows, enabled = EXCLUDED.enabled, unit_files = EXCLUDED.unit_files, auto_sync = EXCLUDED.auto_sync,
        baseline_done = CASE WHEN $7 THEN false ELSE kdocs_bindings.baseline_done END,
        enabled_at = CASE WHEN EXCLUDED.enabled AND NOT kdocs_bindings.enabled THEN now() ELSE kdocs_bindings.enabled_at END,
        updated_at = now()`,
-    [eventId, webhookUrl, token, intervalSec, maxRows, enabled, docChanged, unitFiles ? JSON.stringify(unitFiles) : null],
+    [eventId, webhookUrl, token, intervalSec, maxRows, enabled, docChanged, unitFiles ? JSON.stringify(unitFiles) : null, autoSync],
   );
   if (!existing || existing.enabled !== enabled || docChanged) {
     await withTx(d.ctx.db, (tx) =>
@@ -272,10 +274,11 @@ export async function connectKdocs(
   if (enable) {
     try {
       const r = await saveKdocsBinding(d, eventId, actor, { enabled: true });
-      const extra = r.stoppedEvents.length ? `；这张表格在「${r.stoppedEvents.join('」「')}」上的同步已自动停止` : '';
-      steps.push({ name: '开启同步', ok: true, detail: (keepRunning ? '同步保持开启' : '已开启同步') + extra });
+      const extra = r.stoppedEvents.length ? `；这张表格在「${r.stoppedEvents.join('」「')}」上的读取已自动停止` : '';
+      const how = r.binding?.autoSync ? '自动定时读取' : '手动读取：看到表格有变化时点「读取金山表格」';
+      steps.push({ name: '启用读取', ok: true, detail: `${keepRunning ? '保持启用' : '已启用'}（${how}）${extra}` });
     } catch (e) {
-      steps.push({ name: '开启同步', ok: false, detail: (e as Error).message });
+      steps.push({ name: '启用读取', ok: false, detail: (e as Error).message });
       return { ok: false, steps, overview: await getKdocsOverview(d, eventId) };
     }
   }

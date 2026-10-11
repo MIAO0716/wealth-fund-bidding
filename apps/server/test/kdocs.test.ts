@@ -306,7 +306,7 @@ describe('通过金山文档竞标', () => {
 
   it('后台定时同步（不手动触发）：看到「请确认」提示后选择「确认」，不会被程序清掉', async () => {
     const { eventId, fileId } = await prepared({ enable: false, live: true });
-    await call(ctx.app, 'PUT', api(eventId), { cookie: ctx.adminCookie, body: { enabled: true, intervalSec: 1 } });
+    await call(ctx.app, 'PUT', api(eventId), { cookie: ctx.adminCookie, body: { enabled: true, intervalSec: 1, autoSync: true } });
     const waitFor = async (cond: () => boolean) => {
       for (let i = 0; i < 50 && !cond(); i++) await new Promise((r) => setTimeout(r, 200));
       return cond();
@@ -344,7 +344,7 @@ describe('一键连接', () => {
       ['保存链接与令牌', true],
       ['测试连接', true],
       ['写入表格版式', true],
-      ['开启同步', true],
+      ['启用读取', true],
     ]);
     expect(r.body.overview.binding.enabled).toBe(true);
     expect(cell(fileId, '浦东', 'A1')).toBe('浦东 · 一键连接测试');
@@ -355,7 +355,7 @@ describe('一键连接', () => {
     const oa = (await call(ctx.app, 'GET', api(a), { cookie: ctx.adminCookie })).body;
     const b = await createFormalEvent(ctx, { ...FULL, name: '新活动' });
     const r = await connect(b, { webhookUrl: oa.binding.webhookUrl, token: mock().token, unitFiles: filesText(oa) });
-    expect(r.body.steps.at(-1).detail).toContain('同步已自动停止');
+    expect(r.body.steps.at(-1).detail).toContain('读取已自动停止');
     const after = await call(ctx.app, 'GET', api(a), { cookie: ctx.adminCookie });
     expect(after.body.binding.enabled).toBe(false);
     expect(ctx.kdocs.sync.isActive(a)).toBe(false);
@@ -461,7 +461,7 @@ describe('每家单位一个文件（各单位互相看不到）', () => {
 describe('按需同步（减少金山文档调用次数）', () => {
   it('首轮未发布 30 秒、等待/组间/暂停 10 秒、竞标中按配置间隔、全部锁定后停止；现场操作后立即同步', async () => {
     const { eventId } = await prepared({ enable: false });
-    await call(ctx.app, 'PUT', api(eventId), { cookie: ctx.adminCookie, body: { enabled: true, intervalSec: 3 } });
+    await call(ctx.app, 'PUT', api(eventId), { cookie: ctx.adminCookie, body: { enabled: true, intervalSec: 3, autoSync: true } });
     const status = async () => (await call(ctx.app, 'GET', api(eventId), { cookie: ctx.adminCookie })).body.status;
     const waitPace = async (pace: string) => {
       for (let i = 0; i < 50; i++) {
@@ -497,6 +497,31 @@ describe('按需同步（减少金山文档调用次数）', () => {
     expect(st.nextSyncAt).toBeNull();
     // 停止自动同步后，「立即同步」仍可用
     await syncNow(eventId);
+    await call(ctx.app, 'PUT', api(eventId), { cookie: ctx.adminCookie, body: { enabled: false } });
+  }, 30_000);
+});
+
+describe('手动读取（默认）', () => {
+  it('启用后只读取一次（标记同步前已填写），之后不自动读取；点「读取」才处理，并返回本次结果', async () => {
+    const { eventId, fileId } = await prepared({ enable: false, live: true });
+    await call(ctx.app, 'PUT', api(eventId), { cookie: ctx.adminCookie, body: { enabled: true, intervalSec: 1 } });
+    const status = async () => (await call(ctx.app, 'GET', api(eventId), { cookie: ctx.adminCookie })).body.status;
+    for (let i = 0; i < 30 && !(await status())?.lastOkAt; i++) await new Promise((r) => setTimeout(r, 100));
+    const first = await status();
+    expect(first.autoSync).toBe(false);
+    expect(first.nextSyncAt).toBeNull();
+    // 领导填写后等 2.5 秒：不会被自动读取
+    await ackViaDoc(eventId, fileId, '浦东');
+    const callsBefore = (await status()).calls;
+    edit(fileId, '浦东', 'B13', '35');
+    edit(fileId, '浦东', 'C13', '确认');
+    await new Promise((r) => setTimeout(r, 2500));
+    expect((await status()).calls).toBe(callsBefore);
+    expect(cell(fileId, '浦东', 'D13')).toBeNull();
+    // 手动读取：处理并返回结果摘要
+    const r = await syncNow(eventId);
+    expect(r.status.lastRead).toMatchObject({ applied: 1, rejected: 0, units: ['浦东'] });
+    expect(String(cell(fileId, '浦东', 'D13'))).toContain('已生效');
     await call(ctx.app, 'PUT', api(eventId), { cookie: ctx.adminCookie, body: { enabled: false } });
   }, 30_000);
 });
