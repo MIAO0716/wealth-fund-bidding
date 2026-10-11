@@ -457,3 +457,46 @@ describe('每家单位一个文件（各单位互相看不到）', () => {
     await enable(eventId, false);
   });
 });
+
+describe('按需同步（减少金山文档调用次数）', () => {
+  it('首轮未发布 30 秒、等待/组间/暂停 10 秒、竞标中按配置间隔、全部锁定后停止；现场操作后立即同步', async () => {
+    const { eventId } = await prepared({ enable: false });
+    await call(ctx.app, 'PUT', api(eventId), { cookie: ctx.adminCookie, body: { enabled: true, intervalSec: 3 } });
+    const status = async () => (await call(ctx.app, 'GET', api(eventId), { cookie: ctx.adminCookie })).body.status;
+    const waitPace = async (pace: string) => {
+      for (let i = 0; i < 50; i++) {
+        const st = await status();
+        if (st?.pace === pace) return st;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      throw new Error(`节奏未变为 ${pace}：${JSON.stringify(await status())}`);
+    };
+    const delay = (st: any) => (new Date(st.nextSyncAt).getTime() - new Date(st.lastOkAt).getTime()) / 1000;
+
+    let st = await waitPace('COLD');
+    expect(delay(st)).toBeGreaterThanOrEqual(29);
+
+    const calls0 = st.calls;
+    await goLive(ctx, eventId, 'wealth', 1); // 发布 + 开始并开放第一组：立即同步
+    st = await waitPace('HOT');
+    expect(st.calls).toBeGreaterThan(calls0);
+    expect(delay(st)).toBeLessThanOrEqual(3.5);
+
+    await control(ctx, eventId, 'wealth', 'CLOSE_GROUP', { groupNo: 1 });
+    st = await waitPace('WARM');
+    expect(delay(st)).toBeGreaterThanOrEqual(9);
+
+    await control(ctx, eventId, 'wealth', 'PAUSE');
+    await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true });
+    await importRows(ctx, eventId, fullRows('fund', { base: () => '200' }));
+    await goLive(ctx, eventId, 'fund', 1);
+    await waitPace('HOT');
+    await control(ctx, eventId, 'fund', 'PAUSE');
+    await control(ctx, eventId, 'fund', 'LOCK', { confirm: true });
+    st = await waitPace('IDLE');
+    expect(st.nextSyncAt).toBeNull();
+    // 停止自动同步后，「立即同步」仍可用
+    await syncNow(eventId);
+    await call(ctx.app, 'PUT', api(eventId), { cookie: ctx.adminCookie, body: { enabled: false } });
+  }, 30_000);
+});

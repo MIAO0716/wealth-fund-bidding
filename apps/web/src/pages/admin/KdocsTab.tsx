@@ -27,6 +27,8 @@ interface Overview {
     calls: number;
     failures: number;
     missingUnits: string[];
+    pace: 'HOT' | 'WARM' | 'COLD' | 'IDLE' | null;
+    nextSyncAt: string | null;
   } | null;
   mockAvailable: boolean;
   reusable: { eventId: string; eventName: string; webhookUrl: string; updatedAt: string | null } | null;
@@ -57,6 +59,13 @@ function splitPaste(text: string): { url: string; token: string } | null {
   const rest = text.replace(m[0], ' ').split(/[\s,，;；]+/).filter((x) => x.length >= 8 && !/[：:]$/.test(x));
   return { url: m[0], token: rest.sort((a, b) => b.length - a.length)[0] ?? '' };
 }
+
+const PACE_TEXT: Record<string, string> = {
+  HOT: '竞标中：按同步间隔读取',
+  WARM: '等待中（未开始 / 组间 / 暂停）：每 10 秒',
+  COLD: '首轮未发布：每 30 秒',
+  IDLE: '已全部锁定：停止自动同步',
+};
 
 const STATUS_CHIP: Record<string, [string, string]> = {
   APPLIED: ['green', '已生效'],
@@ -455,6 +464,15 @@ export function KdocsTab({ eventId }: TabProps) {
                     <td style={{ color: 'var(--red)' }}>{st.missingUnits.join('、')}</td>
                   </tr>
                 )}
+                {b.enabled && st?.pace && (
+                  <tr>
+                    <td>同步节奏</td>
+                    <td>
+                      {PACE_TEXT[st.pace]}
+                      {st.nextSyncAt && <span className="small muted">（下次 {fmtTime(st.nextSyncAt)}）</span>}
+                    </td>
+                  </tr>
+                )}
                 <tr>
                   <td>调用次数</td>
                   <td>
@@ -488,7 +506,10 @@ export function KdocsTab({ eventId }: TabProps) {
               )}
             </div>
           )}
-          <p className="small muted">结束本组、暂停、锁定前，系统会先自动读取一次表格，把最后几秒的填写读进来。</p>
+          <p className="small muted">
+            按需同步：只有某组正在竞标时才频繁读取，其余时间放慢，以减少对金山文档的调用次数；发布首轮、开始、开放/结束本组、暂停、恢复、锁定后会立即读取一次。
+            结束本组、暂停、锁定前，系统会先自动读取一次表格，把最后几秒的填写读进来。
+          </p>
         </div>
 
         <div className="a-card">

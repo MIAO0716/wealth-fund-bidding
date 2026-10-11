@@ -51,6 +51,18 @@ export interface KdocsBindingRow {
   unit_files: Record<string, string> | null;
 }
 
+/**
+ * 按需同步的节奏（减少对金山文档的调用次数）：
+ * - HOT  有组正在竞标：按配置的同步间隔（默认 3 秒）
+ * - WARM 首轮已发布等待开始、组与组之间、暂停：每 10 秒（认领底标等反馈不至于太慢）
+ * - COLD 当前专场首轮尚未发布：每 30 秒
+ * - IDLE 理财、基金都已锁定：停止自动同步（「立即同步」仍可用）
+ * 现场操作（发布首轮、开始、开放/结束本组、暂停、恢复、锁定）后会立即同步一次，不必等下一轮。
+ */
+export type KdocsPace = 'HOT' | 'WARM' | 'COLD' | 'IDLE';
+export const KDOCS_WARM_MS = 10_000;
+export const KDOCS_COLD_MS = 30_000;
+
 export interface KdocsStatus {
   enabled: boolean;
   state: 'STOPPED' | 'RUNNING' | 'ERROR' | 'READ_ONLY';
@@ -65,6 +77,10 @@ export interface KdocsStatus {
   /** 打不开的单位文件等提示 */
   unitErrors: string[];
   baselineDone: boolean;
+  /** 当前同步节奏；null 表示尚未判断 */
+  pace: KdocsPace | null;
+  /** 下一次自动同步的时间；null 表示不再自动同步 */
+  nextSyncAt: string | null;
 }
 
 type MeSnapshot = Awaited<ReturnType<typeof bidderMe>>;
@@ -168,6 +184,8 @@ class EventSync {
       missingUnits: [],
       unitErrors: [],
       baselineDone: binding.baseline_done,
+      pace: null,
+      nextSyncAt: null,
     };
   }
 
@@ -197,15 +215,31 @@ class EventSync {
     return run.finally(() => this.schedule(this.nextDelay()));
   }
 
-  private nextDelay(): number {
+  private nextDelay(): number | null {
     const base = this.binding.interval_sec * 1000;
     const f = this.status.consecutiveFailures;
-    return f === 0 ? base : Math.min(base * 2 ** Math.min(f, 5), 60_000);
+    if (f > 0) return Math.min(base * 2 ** Math.min(f, 5), 60_000);
+    switch (this.status.pace) {
+      case 'IDLE':
+        return null;
+      case 'COLD':
+        return Math.max(base, KDOCS_COLD_MS);
+      case 'WARM':
+        return Math.max(base, KDOCS_WARM_MS);
+      default:
+        return base;
+    }
   }
 
-  private schedule(ms: number): void {
+  private schedule(ms: number | null): void {
     if (this.stopped) return;
     if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    if (ms === null) {
+      this.status.nextSyncAt = null;
+      return;
+    }
+    this.status.nextSyncAt = new Date(Date.now() + ms).toISOString();
     this.timer = setTimeout(() => {
       this.timer = null;
       const run = this.chain.then(() => this.cycle());
@@ -258,6 +292,7 @@ class EventSync {
       await this.computeDesired(grids);
       if (this.oneShot.length || this.pendingWrites().length) await this.send([]);
 
+      this.status.pace = await this.currentPace();
       this.status.state = 'RUNNING';
       this.status.lastOkAt = new Date().toISOString();
       this.status.consecutiveFailures = 0;
@@ -272,6 +307,23 @@ class EventSync {
       if (!(e instanceof KdocsError)) this.log(`金山文档同步出错（活动 ${eventId}）`, e);
       throw e;
     }
+  }
+
+  private async currentPace(): Promise<KdocsPace> {
+    const r = await this.ctx.db.query<{ project_code: string; status: string; open: boolean; current: boolean }>(
+      `SELECT p.project_code, p.status, p.project_code = e.current_project AS current,
+              EXISTS (SELECT 1 FROM project_groups g
+                       WHERE g.event_id = p.event_id AND g.project_code = p.project_code AND g.status = 'OPEN') AS open
+         FROM projects p JOIN events e ON e.id = p.event_id
+        WHERE p.event_id = $1`,
+      [this.binding.event_id],
+    );
+    if (r.rows.length && r.rows.every((x) => x.status === 'LOCKED')) return 'IDLE';
+    const cur = r.rows.find((x) => x.current);
+    if (!cur) return 'WARM';
+    if (cur.status === 'LIVE' && cur.open) return 'HOT';
+    if (cur.status === 'DRAFT') return 'COLD';
+    return 'WARM';
   }
 
   /** 一次脚本调用：先写（一次性指令 + 与上次写入不同的内容），后读 */
@@ -668,6 +720,11 @@ export class KdocsSyncManager {
 
   isActive(eventId: string): boolean {
     return this.loops.has(eventId);
+  }
+
+  /** 现场状态变化后立即同步一轮（不等待结果，失败由下一轮重试） */
+  wake(eventId: string): void {
+    this.loops.get(eventId)?.syncNow().catch(() => {});
   }
 
   /** 立即同步一轮；未开启时什么也不做 */

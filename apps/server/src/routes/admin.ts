@@ -160,6 +160,7 @@ export function registerAdminRoutes(api: FastifyInstance, deps: AppDeps): void {
 
   api.post<{ Params: P }>('/admin/events/:eventId/projects/:projectCode/publish-first-round', auth, async (req) => {
     const r = await publishFirstRound(ctx, req.params.eventId, actor(req), req.params.projectCode, body(req));
+    deps.kdocs.sync.wake(req.params.eventId);
     return { ...r.body, replayed: r.replayed };
   });
 
@@ -171,6 +172,8 @@ export function registerAdminRoutes(api: FastifyInstance, deps: AppDeps): void {
     const kdocsWarning =
       action === 'CLOSE_GROUP' || action === 'PAUSE' || action === 'LOCK' ? await deps.kdocs.sync.flush(req.params.eventId) : null;
     const r = await controlProject(ctx, req.params.eventId, actor(req), req.params.projectCode, body(req));
+    // 状态已变：立即同步一次，把「本组竞标中」等状态写到领导表格，并按新状态调整同步节奏
+    deps.kdocs.sync.wake(req.params.eventId);
     return { ...r.body, replayed: r.replayed, ...(kdocsWarning ? { kdocsWarning } : {}) };
   });
 
