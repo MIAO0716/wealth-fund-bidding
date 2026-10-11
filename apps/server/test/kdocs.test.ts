@@ -90,6 +90,19 @@ describe('AirScript 与接口', () => {
     ]);
     expect(r.reads[1].values).toBeNull();
     expect((runAirScript(wb, { protocol: 99 }) as any).ok).toBe(false);
+    // 跨文件读写：与金山一致，同一时刻只能额外打开一个文件；脚本逐个打开、读写、关闭
+    const files = new Map<string, MockWorkbook>(['a', 'b', 'c'].map((id) => {
+      const f = new MockWorkbook(id);
+      f.addSheet(`表${id}`).write('A1', id);
+      return [`mock://${id}`, f];
+    }));
+    const multi = runAirScript(wb, {
+      protocol: 1,
+      writes: [{ file: 'mock://b', sheet: '表b', range: 'B1', values: [['写入b']] }],
+      reads: ['a', 'b', 'c'].map((id) => ({ file: `mock://${id}`, sheet: `表${id}`, range: 'A1:B1' })),
+    }, [], (u) => files.get(String(u))!) as any;
+    expect(multi.errors).toEqual([]);
+    expect(multi.reads.map((x: any) => x.values)).toEqual([[['a', null]], [['b', '写入b']], [['c', null]]]);
     // 在编辑器里直接运行（无参数）：自检，日志说明「云文档API」是否可用
     const logs: string[] = [];
     const self = runAirScript(wb, undefined, logs, () => wb) as any;

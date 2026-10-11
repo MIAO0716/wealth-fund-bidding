@@ -9,7 +9,7 @@
  * 语法保持 ES5（var / function），不依赖新语法。
  */
 
-export const AIRSCRIPT_VERSION = '1.1.1';
+export const AIRSCRIPT_VERSION = '1.2.0';
 
 export const AIRSCRIPT_SOURCE = `/**
  * 理财、基金现场竞标 · 金山文档同步脚本 v${AIRSCRIPT_VERSION}（协议 1）
@@ -90,67 +90,81 @@ function main(argv) {
     return result;
   }
 
-  // 本文件 + 本次用到的其他文件（每个文件只打开一次，结束时关闭）
-  var books = { '': { app: Application, names: listSheetNames(Application), error: null } };
-  var opened = [];
-  result.sheets = books[''].names;
-  function bookOf(file) {
+  // 按文件分组：金山同一时刻只能额外打开一个文件，所以逐个打开 → 读写 → 关闭，再处理下一个
+  var groups = {};
+  var order = [];
+  function groupOf(file) {
     var key = file || '';
-    if (books[key]) return books[key];
-    try {
-      var f = KSDrive.openFile(file);
-      opened.push(f);
-      books[key] = { app: f.Application, names: listSheetNames(f.Application), error: null };
-    } catch (e) {
-      books[key] = { app: null, names: [], error: '无法打开文件（请确认链接正确、脚本所有者有权限，且已在「服务」中添加云文档API）：' + e };
+    if (!groups[key]) {
+      groups[key] = { file: key, writes: [], reads: [] };
+      order.push(key);
     }
-    return books[key];
+    return groups[key];
   }
+  for (var i = 0; i < writes.length; i++) groupOf(writes[i].file).writes.push(writes[i]);
+  for (var j = 0; j < reads.length; j++) groupOf(reads[j].file).reads.push({ index: j, read: reads[j] });
+  var readResults = [];
   var missing = {};
-  function sheetOf(file, name) {
-    var b = bookOf(file);
-    if (b.error) return { error: b.error };
-    if (b.names.indexOf(name) < 0) {
-      missing[name] = true;
-      return { error: null, sheet: null };
-    }
-    return { error: null, sheet: b.app.Sheets.Item(name) };
-  }
+  result.sheets = listSheetNames(Application);
 
-  // 先写后读：本次读取的内容已包含本次写入
-  for (var i = 0; i < writes.length; i++) {
-    var w = writes[i];
-    var ws = sheetOf(w.file, w.sheet);
-    if (ws.error) {
-      result.errors.push(w.sheet + '：' + ws.error);
-      continue;
-    }
-    if (!ws.sheet) continue;
-    try {
-      ws.sheet.Range(w.range).Value = isSingleCell(w.values) ? w.values[0][0] : w.values;
-      result.written++;
-    } catch (e) {
-      result.errors.push('写入 ' + w.sheet + '!' + w.range + ' 失败：' + e);
-    }
-  }
-  for (var j = 0; j < reads.length; j++) {
-    var r = reads[j];
-    var rs = sheetOf(r.file, r.sheet);
-    if (rs.error || !rs.sheet) {
-      result.reads.push({ file: r.file, sheet: r.sheet, range: r.range, values: null, error: rs.error || undefined });
-      continue;
+  for (var g = 0; g < order.length; g++) {
+    var grp = groups[order[g]];
+    var app = Application;
+    var opened = null;
+    var openError = null;
+    if (grp.file) {
+      try {
+        opened = KSDrive.openFile(grp.file);
+        app = opened.Application;
+      } catch (e) {
+        openError = '无法打开文件（请确认链接正确、脚本所有者有权限，且已在「服务」中添加云文档API）：' + e;
+      }
     }
     try {
-      result.reads.push({ file: r.file, sheet: r.sheet, range: r.range, values: to2D(rs.sheet.Range(r.range).Value2) });
-    } catch (e2) {
-      result.reads.push({ file: r.file, sheet: r.sheet, range: r.range, values: null, error: String(e2) });
+      var names = openError ? [] : listSheetNames(app);
+      // 先写后读：本次读取的内容已包含本次写入
+      for (var wi = 0; wi < grp.writes.length; wi++) {
+        var w = grp.writes[wi];
+        if (openError) {
+          result.errors.push(w.sheet + '：' + openError);
+          continue;
+        }
+        if (names.indexOf(w.sheet) < 0) {
+          missing[w.sheet] = true;
+          continue;
+        }
+        try {
+          app.Sheets.Item(w.sheet).Range(w.range).Value = isSingleCell(w.values) ? w.values[0][0] : w.values;
+          result.written++;
+        } catch (e1) {
+          result.errors.push('写入 ' + w.sheet + '!' + w.range + ' 失败：' + e1);
+        }
+      }
+      for (var ri = 0; ri < grp.reads.length; ri++) {
+        var r = grp.reads[ri].read;
+        var out = { file: r.file, sheet: r.sheet, range: r.range, values: null };
+        if (openError) {
+          out.error = openError;
+        } else if (names.indexOf(r.sheet) < 0) {
+          missing[r.sheet] = true;
+        } else {
+          try {
+            out.values = to2D(app.Sheets.Item(r.sheet).Range(r.range).Value2);
+          } catch (e2) {
+            out.error = String(e2);
+          }
+        }
+        readResults[grp.reads[ri].index] = out;
+      }
+    } finally {
+      if (opened) {
+        try {
+          opened.close();
+        } catch (e3) {}
+      }
     }
   }
-  for (var k = 0; k < opened.length; k++) {
-    try {
-      opened[k].close();
-    } catch (e3) {}
-  }
+  result.reads = readResults;
   for (var m in missing) result.missingSheets.push(m);
   if (result.errors.length > 0) result.ok = false;
   return result;

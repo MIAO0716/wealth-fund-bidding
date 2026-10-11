@@ -246,13 +246,24 @@ const compiled = new vm.Script(`(function () {\n${AIRSCRIPT_SOURCE}\n})()`, { fi
 
 /** 在隔离环境中运行 AirScript 源码 */
 export function runAirScript(wb: MockWorkbook, argv: unknown, logs: string[] = [], openFile?: (url: unknown) => MockWorkbook): unknown {
+  let openCount = 0;
   const sandbox = {
     Application: wb.application(),
     KSDrive: {
+      // 与金山一致：同一时刻只能额外打开一个文件，须先 close
       openFile: (url: unknown) => {
         if (!openFile) throw new Error('KSDrive 不可用');
+        if (openCount > 0) throw new Error('同一时刻只能打开一个额外文件，请先调用文件的close方法');
         const other = openFile(url);
-        return { Application: other.application(), close: () => {} };
+        openCount++;
+        let closed = false;
+        return {
+          Application: other.application(),
+          close: () => {
+            if (!closed) openCount--;
+            closed = true;
+          },
+        };
       },
     },
     Context: { argv: JSON.parse(JSON.stringify(argv ?? {})) },
