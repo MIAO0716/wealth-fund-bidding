@@ -1,6 +1,6 @@
 /**
  * 现场加码事务：领导端与管理员代录共用同一套校验。
- * 请求发送「最终确认增幅」，服务端计算差值是否属于允许档位；单位取自认证会话，不信任请求体。
+ * 请求发送「最终确认增幅」，服务端校验为整数且高于当前值（每次至少 1 个百分点）；单位取自认证会话，不信任请求体。
  */
 
 import {
@@ -10,7 +10,6 @@ import {
   UNIT_BY_CODE,
   checkBidTarget,
   fenToWanExact,
-  normalizeAllowedSteps,
   targetFen,
 } from '@bidding/shared';
 import { uuid } from '../lib/crypto';
@@ -95,18 +94,15 @@ export async function submitBid(
       if (input.expectedBidVersion !== state.version) {
         throw bizError('VERSION_CONFLICT', undefined, { currentPp: state.current_pp, bidVersion: state.version });
       }
-      // 4–5. 整数、5 的倍数、大于当前值、差值属于允许档位、满足组别底线
-      const steps = normalizeAllowedSteps(config.allowedIncrementSteps) ?? [5];
+      // 4–5. 整数百分点、大于当前值（每次至少 1 个百分点）、满足组别底线
       const check = checkBidTarget({
         currentPp: state.current_pp,
         targetPp: input.targetIncreasePp,
-        allowedSteps: steps,
         groupMinPp: GROUP_BY_NO.get(unit.groupNo)!.minIncreasePp,
       });
       if (!check.ok) {
         throw bizError(check.code === 'NOT_GREATER' ? 'NOT_GREATER' : check.code === 'INVALID_STEP' ? 'INVALID_STEP' : 'INVALID_VALUE', check.reason, {
           currentPp: state.current_pp,
-          allowedSteps: steps,
         });
       }
       const toPp = input.targetIncreasePp as number;

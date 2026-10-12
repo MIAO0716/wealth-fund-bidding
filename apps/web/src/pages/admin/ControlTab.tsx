@@ -1,6 +1,7 @@
 import { LEADER_STATUS_LABELS, PROJECT_STATUS_NAMES, type LiveRow, type ProjectCode, type ScreenMode } from '@bidding/shared';
 import { useEffect, useState } from 'react';
 import { KdocsReadBar } from '../../components/KdocsRead';
+import { StepPicker } from '../../components/StepPicker';
 import { Modal } from '../../components/ui';
 import { ApiError, api, errorText, newIdempotencyKey } from '../../lib/api';
 import { fmtTime, previewTargetWan, wan2 } from '../../lib/format';
@@ -487,7 +488,7 @@ function ProxyBidModal(props: {
   onDone: (t: string) => void;
 }) {
   const { row } = props;
-  const [step, setStep] = useState(props.steps.includes(5) ? 5 : props.steps[0]);
+  const [step, setStep] = useState(props.steps[0] ?? 1);
   const [reason, setReason] = useState('');
   const [high, setHigh] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -527,13 +528,7 @@ function ProxyBidModal(props: {
         </>
       }
     >
-      <div className="m-steps" style={{ gridTemplateColumns: `repeat(${props.steps.length}, 1fr)` }}>
-        {props.steps.map((s) => (
-          <button key={s} className={`m-step ${s === step ? 'on' : ''}`} onClick={() => setStep(s)}>
-            +{s}
-          </button>
-        ))}
-      </div>
+      <StepPicker steps={props.steps} value={step} onChange={setStep} disabled={busy} />
       <div className="m-confirm-row num">
         <span className="from">{row.currentPp}%</span>
         <span className="arrow">→</span>

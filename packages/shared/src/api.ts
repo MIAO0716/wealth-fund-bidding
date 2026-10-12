@@ -18,7 +18,7 @@ export interface EventConfig {
   dataSource: string;
   /** 二维码有效小时数 */
   qrValidHours: number;
-  /** 允许追加档位（百分点） */
+  /** 手机与代录的快捷档位（百分点）；每次加码可以是任意正整数 */
   allowedIncrementSteps: number[];
   /** 增幅达到此值时需再次明确确认（不是上限） */
   highValueConfirmPp: number;

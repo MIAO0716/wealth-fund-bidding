@@ -380,7 +380,7 @@ function EditModal(props: { row: DraftRow; project: ProjectCode; draftVersion: n
           <input inputMode="decimal" value={baseWan} onChange={(e) => setBase(e.target.value)} />
         </label>
         <label className="field">
-          <span>首轮增幅（整数百分点，5 的倍数；30% 填 30）</span>
+          <span>首轮增幅（整数百分点，不低于组别门槛；30% 填 30）</span>
           <input inputMode="numeric" value={pp} onChange={(e) => setPp(e.target.value)} />
         </label>
         <label className="field">

@@ -178,15 +178,15 @@ function SetupTab({ eventId, state, reload }: TabProps) {
             <input type="number" min={5} step={5} value={cfg.highValueConfirmPp} onChange={(e) => set('highValueConfirmPp', Number(e.target.value))} />
           </label>
           <div className="field">
-            <span>允许追加档位（百分点）</span>
+            <span>手机快捷档位（百分点）</span>
             <div className="a-row">
-              {[5, 10, 15, 20].map((s) => (
+              {[1, 2, 3, 5, 10, 15, 20].map((s) => (
                 <label key={s} className="a-row" style={{ gap: 4 }}>
                   <input type="checkbox" checked={cfg.allowedIncrementSteps.includes(s)} onChange={() => toggleStep(s)} />+{s}
                 </label>
               ))}
             </div>
-            <span className="small">若组织者要求「每次只能追加5个百分点」，只勾选 +5。</span>
+            <span className="small">每次加码为 1 的整数倍、组内自由加码：领导可以任意填写整数，这里只决定手机上显示哪几个快捷按钮。</span>
           </div>
           <label className="field">
             <span>会场 Wi-Fi 名称（选填，印在领导使用卡上，手机相机扫码即可连接）</span>

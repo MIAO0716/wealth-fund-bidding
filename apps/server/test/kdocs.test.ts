@@ -236,7 +236,7 @@ describe('通过金山文档竞标', () => {
     const { eventId, fileId } = await prepared({ live: true });
     await syncNow(eventId);
     expect(String(cell(fileId, '浦东', 'B3'))).toContain('（首次填写即确认）');
-    expect(cell(fileId, '浦东', 'B5')).toBe('35 / 40 / 45 / 50');
+    expect(cell(fileId, '浦东', 'B5')).toBe('31% 及以上（整数）');
 
     // 加到 35%：同时认领底标
     fill(fileId, '浦东', '35');
@@ -245,7 +245,7 @@ describe('通过金山文档竞标', () => {
     expect(result(fileId, '浦东')).toMatch(/^✔ 理财已生效：30% → 35%，并确认底标（\d\d:\d\d:\d\d）$/);
     expect(cell(fileId, '浦东', 'B6')).toBeNull();
     expect(cell(fileId, '浦东', 'B4')).toBe('35%');
-    expect(cell(fileId, '浦东', 'B5')).toBe('40 / 45 / 50 / 55');
+    expect(cell(fileId, '浦东', 'B5')).toBe('36% 及以上（整数）');
     expect(String(cell(fileId, '浦东', 'B3'))).toContain('（已确认）');
     expect(cell(fileId, '浦东', 'B2')).toBe('理财 · 本组竞标中，可以加码');
     const rec = await ctx.db.query(`SELECT source, actor_type, to_pp FROM bid_records WHERE event_id = $1`, [eventId]);
@@ -388,7 +388,7 @@ describe('通过金山文档竞标', () => {
     expect(String(cell(fileId, '浦东', 'B3'))).toContain('（首次填写即确认）');
     const ack = await ctx.db.query(`SELECT base_ack_at FROM bid_states WHERE event_id = $1 AND project_code = 'fund' AND unit_code = 'PD'`, [eventId]);
     expect(ack.rows[0].base_ack_at).toBeNull();
-    const first = String(cell(fileId, '浦东', 'B5')).split(' / ')[0];
+    const first = String(parseInt(String(cell(fileId, '浦东', 'B5')), 10));
     fill(fileId, '浦东', first);
     await syncNow(eventId);
     expect(result(fileId, '浦东')).toContain('基金已生效');

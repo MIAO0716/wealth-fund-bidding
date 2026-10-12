@@ -64,7 +64,7 @@ export function parseConfigPatch(input: unknown): Partial<EventConfig> {
   const patch = r.data as Partial<EventConfig>;
   if (patch.allowedIncrementSteps !== undefined) {
     const steps = normalizeAllowedSteps(patch.allowedIncrementSteps);
-    if (!steps) throw bizError('BAD_REQUEST', '允许追加档位须为 5 的正整数倍，例如 [5] 或 [5,10,15,20]');
+    if (!steps) throw bizError('BAD_REQUEST', '快捷档位须为正整数，例如 [1,5,10]');
     patch.allowedIncrementSteps = steps;
   }
   return patch;
@@ -106,7 +106,7 @@ export function configProblems(config: EventConfig): string[] {
   if (!config.amountBasis) p.push('未填写金额统计口径（如销量或AUM净增）');
   if (!config.statPeriod) p.push('未填写统计周期');
   if (!config.dataSource) p.push('未填写数据来源说明');
-  if (!normalizeAllowedSteps(config.allowedIncrementSteps)) p.push('允许追加档位配置不合法');
+  if (!normalizeAllowedSteps(config.allowedIncrementSteps)) p.push('快捷档位配置不合法');
   return p;
 }
 

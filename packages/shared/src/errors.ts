@@ -6,7 +6,7 @@ export const ERROR_MESSAGES = {
   PROJECT_LOCKED: '本项目已结束，不能追加',
   GROUP_NOT_OPEN: '尚未轮到本组，或本组已结束',
   BASE_NOT_ACKNOWLEDGED: '请先确认认领基础底标',
-  INVALID_STEP: '本次追加须为允许的5个百分点档位',
+  INVALID_STEP: '追加后的增幅不符合规则',
   NOT_GREATER: '新增幅必须高于已确认增幅',
   VERSION_CONFLICT: '当前增幅已更新，请重新确认',
   IDEMPOTENCY_CONFLICT: '请求标识冲突，请刷新并重新确认',

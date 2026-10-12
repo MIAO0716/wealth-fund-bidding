@@ -74,18 +74,18 @@ describe('A02 导入各组最低增幅 10%', () => {
   });
 });
 
-describe('A03 非 5 倍数或低于组别门槛', () => {
+describe('A03 非整数或低于组别门槛', () => {
   it('分别提示，整批不写入', async () => {
     const eventId = await createFormalEvent(ctx);
     const rows = fullRows('wealth');
-    rows[0].firstRoundIncreasePp = 12; // 第一组 12%
+    rows[0].firstRoundIncreasePp = 12.5; // 第一组 12.5%（不是整数）
     rows.find((r) => r.unitCode === 'HP')!.firstRoundIncreasePp = 5; // 第二组 5%
     rows.find((r) => r.unitCode === 'XH')!.firstRoundIncreasePp = 5; // 第三组 5%
     const v = await validate(eventId, rows);
     expect(v.body.valid).toBe(false);
     expect(v.body.validationId).toBeNull();
     const err = (code: string) => v.body.rows.find((r: any) => r.unitCode === code).errors.join('');
-    expect(err('PD')).toContain('不是 5 的整数倍');
+    expect(err('PD')).toContain('不是整数百分点');
     expect(err('HP')).toContain('低于');
     expect(err('XH')).toContain('第三组最低增幅 10%');
     expect(v.body.summary.errors).toBe(3);
@@ -283,7 +283,7 @@ describe('模板与文件解析', () => {
 
   it('通过上传接口校验', async () => {
     const eventId = await createFormalEvent(ctx);
-    const csv = '﻿项目,单位代码,单位名称,基础底标（万元）,首轮增幅（百分点）,备注\r\n理财,PD,浦东,100,12,\r\n';
+    const csv = '﻿项目,单位代码,单位名称,基础底标（万元）,首轮增幅（百分点）,备注\r\n理财,PD,浦东,100,8,\r\n';
     const boundary = '----t' + Date.now();
     const payload =
       `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="r1.csv"\r\nContent-Type: text/csv\r\n\r\n` +
@@ -299,6 +299,6 @@ describe('模板与文件解析', () => {
     expect(res.statusCode).toBe(200);
     expect(body.valid).toBe(false);
     expect(body.rows[0].sourceRow).toBe(2);
-    expect(body.rows[0].errors.join('')).toContain('5 的整数倍');
+    expect(body.rows[0].errors.join('')).toContain('低于');
   });
 });

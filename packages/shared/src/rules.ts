@@ -1,7 +1,9 @@
 /** 竞标业务规则：前后端共用，后端以此为准独立校验。 */
 
-export const STEP_PP = 5;
-export const DEFAULT_ALLOWED_INCREMENT_STEPS = [5, 10, 15, 20] as const;
+/** 加码最小单位：1 个百分点（2027 年一季度方案 6.0：每次加码为 1 的整数倍，组内自由加码） */
+export const STEP_PP = 1;
+/** 手机端与代录的快捷档位（只是快捷按钮，可任意填写整数；服务端不限制必须是这些档位） */
+export const DEFAULT_ALLOWED_INCREMENT_STEPS = [1, 5, 10] as const;
 /** 标王门槛：30% 及以上 */
 export const CHAMPION_THRESHOLD_PP = 30;
 /** 技术上可处理的最大增幅（不是业务封顶，只防止溢出与误录） */
@@ -39,12 +41,12 @@ export function canTransition(from: ProjectStatus, to: ProjectStatus): boolean {
   return PROJECT_TRANSITIONS[from].includes(to);
 }
 
-/** 校验允许档位配置：必须是 5 的正整数倍、去重、升序、非空 */
+/** 校验快捷档位配置：正整数、去重、升序、非空 */
 export function normalizeAllowedSteps(steps: unknown): number[] | null {
   if (!Array.isArray(steps) || steps.length === 0) return null;
   const out = new Set<number>();
   for (const s of steps) {
-    if (typeof s !== 'number' || !Number.isInteger(s) || s <= 0 || s % STEP_PP !== 0 || s > 1000) return null;
+    if (typeof s !== 'number' || !Number.isInteger(s) || s <= 0 || s > 1000) return null;
     out.add(s);
   }
   return [...out].sort((a, b) => a - b);
@@ -52,7 +54,7 @@ export function normalizeAllowedSteps(steps: unknown): number[] | null {
 
 export type PpCheck = { ok: true } | { ok: false; reason: string };
 
-/** 申报增幅本身的格式校验：整数百分点、5 的倍数、技术范围内 */
+/** 申报增幅本身的格式校验：整数百分点、技术范围内 */
 export function checkIncreasePpFormat(pp: unknown, label = '增幅'): PpCheck {
   if (pp === null || pp === undefined || pp === '') return { ok: false, reason: `${label}为必填项` };
   if (typeof pp !== 'number' || !Number.isFinite(pp)) {
@@ -66,9 +68,6 @@ export function checkIncreasePpFormat(pp: unknown, label = '增幅'): PpCheck {
   }
   if (pp <= 0) return { ok: false, reason: `${label}必须大于 0` };
   if (pp > TECHNICAL_MAX_PP) return { ok: false, reason: `${label} ${pp} 超出系统可处理范围` };
-  if (pp % STEP_PP !== 0) {
-    return { ok: false, reason: `${label} ${pp}% 不是 5 的整数倍（应为 5%、10%、15%……），系统不会自动取整` };
-  }
   return { ok: true };
 }
 
@@ -83,14 +82,9 @@ export type BidCheckCode = 'INVALID_STEP' | 'NOT_GREATER' | 'INVALID_VALUE';
 
 export type BidCheck = { ok: true; deltaPp: number } | { ok: false; code: BidCheckCode; reason: string };
 
-/** 追加校验：目标值格式、大于当前值、差值属于允许档位、满足组别底线 */
-export function checkBidTarget(params: {
-  currentPp: number;
-  targetPp: unknown;
-  allowedSteps: readonly number[];
-  groupMinPp: number;
-}): BidCheck {
-  const { currentPp, targetPp, allowedSteps, groupMinPp } = params;
+/** 追加校验：目标值为整数百分点、大于当前值（每次至少 1 个百分点）、满足组别底线 */
+export function checkBidTarget(params: { currentPp: number; targetPp: unknown; groupMinPp: number }): BidCheck {
+  const { currentPp, targetPp, groupMinPp } = params;
   if (typeof targetPp !== 'number' || !Number.isInteger(targetPp)) {
     return { ok: false, code: 'INVALID_VALUE', reason: '目标增幅须为整数百分点' };
   }
@@ -100,17 +94,7 @@ export function checkBidTarget(params: {
   if (targetPp > TECHNICAL_MAX_PP) {
     return { ok: false, code: 'INVALID_VALUE', reason: '目标增幅超出系统可处理范围' };
   }
-  if (targetPp % STEP_PP !== 0) {
-    return { ok: false, code: 'INVALID_STEP', reason: `目标增幅 ${targetPp}% 不是 5 的整数倍` };
-  }
   const delta = targetPp - currentPp;
-  if (!allowedSteps.includes(delta)) {
-    return {
-      ok: false,
-      code: 'INVALID_STEP',
-      reason: `本次追加 ${delta} 个百分点不在允许档位（${allowedSteps.map((s) => '+' + s).join(' / ')}）`,
-    };
-  }
   if (targetPp < groupMinPp) {
     return { ok: false, code: 'INVALID_STEP', reason: `目标增幅低于组别最低增幅 ${groupMinPp}%` };
   }

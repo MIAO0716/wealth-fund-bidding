@@ -1,6 +1,7 @@
 import { ERROR_MESSAGES, type BidReceipt, type ProjectCode } from '@bidding/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ConnLine, DemoBadge, Modal } from '../components/ui';
+import { StepPicker } from '../components/StepPicker';
 import { ApiError, api, errorText, newIdempotencyKey } from '../lib/api';
 import { fmtTime, previewTargetWan, wan2 } from '../lib/format';
 import { useRealtime } from '../lib/realtime';
@@ -85,7 +86,7 @@ function BidMain({ eventId }: { eventId: string }) {
   const base = `/api/v1/bidder/events/${eventId}`;
   const { data, error, conn, lastSyncAt, reload } = useRealtime<MeSnapshot>(`${base}/me`, `${base}/stream`);
   const [viewProject, setViewProject] = useState<ProjectCode | null>(null);
-  const [step, setStep] = useState(5);
+  const [step, setStep] = useState(1);
   const [confirming, setConfirming] = useState(false);
   const [highAck, setHighAck] = useState(false);
   const [ackOpen, setAckOpen] = useState(false);
@@ -96,11 +97,8 @@ function BidMain({ eventId }: { eventId: string }) {
 
   const projectCode = viewProject ?? data?.event.currentProject ?? 'wealth';
   const p = data?.projects[projectCode];
-  const steps = data?.event.allowedIncrementSteps ?? [5];
-
-  useEffect(() => {
-    if (!steps.includes(step)) setStep(steps.includes(5) ? 5 : steps[0]);
-  }, [steps.join(','), step]);
+  // 快捷档位；每次加码可以是任意正整数个百分点
+  const steps = data?.event.allowedIncrementSteps ?? [1, 5, 10];
 
   // 专场切换时回到当前专场
   useEffect(() => {
@@ -155,7 +153,7 @@ function BidMain({ eventId }: { eventId: string }) {
       setPending(null);
       setReceipt(r.receipt);
       setMessage(null);
-      setStep(steps.includes(5) ? 5 : steps[0]);
+      setStep(steps[0] ?? 1);
       reload();
     } catch (e) {
       handleBidError(e, pend);
@@ -349,16 +347,9 @@ function BidMain({ eventId }: { eventId: string }) {
         {isCurrent && p.published && p.status !== 'LOCKED' && (
           <section className="m-card">
             <div className="m-current-label" style={{ marginBottom: 10 }}>
-              选择追加档位（百分点）
+              选择追加幅度（整数个百分点，至少 1）
             </div>
-            <div className="m-steps" style={{ gridTemplateColumns: `repeat(${Math.min(steps.length, 4)}, 1fr)` }}>
-              {steps.map((s) => (
-                <button key={s} className={`m-step ${s === step ? 'on' : ''}`} onClick={() => setStep(s)} disabled={busy}>
-                  +{s}
-                  <small>个百分点</small>
-                </button>
-              ))}
-            </div>
+            <StepPicker steps={steps} value={step} onChange={setStep} disabled={busy} />
             <div className="m-preview">
               <span>
                 追加后 <b className="num">{newPp ?? '—'}%</b>
@@ -374,7 +365,7 @@ function BidMain({ eventId }: { eventId: string }) {
                 setConfirming(true);
               }}
             >
-              {step === 5 ? '追加5个百分点' : `确认追加 +${step}`}
+              确认追加 +{step} 个百分点
             </button>
             <div className="m-status-line">{blockReason ?? '确认后不可下调'}</div>
           </section>
@@ -538,7 +529,7 @@ function UsageGuide() {
       </div>
       <ol>
         <li>首轮发布后，点「确认认领基础底标」</li>
-        <li>轮到本组时，选择追加档位，点「追加」，核对后「确认提交」</li>
+        <li>轮到本组时，选择追加幅度（整数个百分点，可用快捷按钮或「−」「＋」调整），点「追加」，核对后「确认提交」</li>
         <li>看到「追加成功 · 服务器已确认」即完成；增幅只增不减</li>
       </ol>
     </section>

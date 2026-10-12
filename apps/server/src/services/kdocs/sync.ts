@@ -18,10 +18,8 @@ import {
   type ProjectCode,
   UNITS,
   type UnitDef,
-  checkBidTarget,
   isBlankCell,
   kdocsReadRange,
-  normalizeAllowedSteps,
   parseTargetCell,
 } from '@bidding/shared';
 import { withSnapshot } from '../../db/pool';
@@ -29,7 +27,6 @@ import { BizError } from '../../lib/errors';
 import { submitBid } from '../bids';
 import type { Actor } from '../core';
 import type { AppContext } from '../context';
-import { readConfig } from '../events';
 import { acknowledgeBase } from '../projects';
 import { bidderMe } from '../views';
 import { type CallOptions, KdocsError, OLD_SCRIPT_MESSAGE, callScript, isCurrentScript } from './client';
@@ -159,15 +156,10 @@ export function statusText(p: MeProject): string {
   }
 }
 
-/** 下一步可选的「加到」数值（尚未认领底标时按认领后计算：首次填写即认领） */
-export function nextTargets(p: MeProject, steps: readonly number[], groupMinPp: number): number[] {
-  if (p.status !== 'LIVE' || p.groupStatus !== 'OPEN' || p.currentPp === null) return [];
-  const out: number[] = [];
-  for (const s of steps) {
-    const t = p.currentPp + s;
-    if (checkBidTarget({ currentPp: p.currentPp, targetPp: t, allowedSteps: steps, groupMinPp }).ok) out.push(t);
-  }
-  return out;
+/** 下一次最少可以加到多少（每次至少 1 个百分点，且不低于组别底线）；不能加码时为 null */
+export function nextMinTarget(p: MeProject, groupMinPp: number): number | null {
+  if (p.status !== 'LIVE' || p.groupStatus !== 'OPEN' || p.currentPp === null) return null;
+  return Math.max(p.currentPp + 1, groupMinPp);
 }
 
 /** 没有可选数值时「可以加到」一栏的说明 */
@@ -625,9 +617,6 @@ class EventSync {
     const stampDue = now - this.lastStampAt >= 30_000;
     if (seq === this.lastSeq && !this.dirty && !stampDue) return;
 
-    const evRow = (await this.ctx.db.query('SELECT * FROM events WHERE id = $1', [this.binding.event_id])).rows[0];
-    const cfg = readConfig(evRow);
-    const steps = normalizeAllowedSteps(cfg.allowedIncrementSteps) ?? [5];
     const next = new Map<string, KdocsWrite>();
     const stamp = fmtTime(new Date());
 
@@ -637,13 +626,13 @@ class EventSync {
       const project = me.event.currentProject as ProjectCode;
       const p = me.projects[project] as MeProject;
       const group = GROUP_BY_NO.get(unit.groupNo)!;
-      const nt = nextTargets(p, steps, group.minIncreasePp);
+      const nt = nextMinTarget(p, group.minIncreasePp);
       const baseNote = p.baseAcknowledged ? '（已确认）' : canAck(p) ? '（首次填写即确认）' : '';
       const info = [
         `${PROJECT_NAMES[project]} · ${statusText(p)}`,
         p.baseTargetWan ? `${p.baseTargetWan} 万元${baseNote}` : '—',
         p.currentPp !== null ? `${p.currentPp}%` : '—',
-        nt.length ? nt.join(' / ') : optionsHint(p),
+        nt !== null ? `${nt}% 及以上（整数）` : optionsHint(p),
       ];
       const at = this.target(unit);
       put(next, at, KDOCS_LAYOUT.infoValueRange, info.map((v) => [v]));

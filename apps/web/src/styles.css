@@ -367,6 +367,56 @@ textarea {
   margin-top: 2px;
 }
 
+.step-picker {
+  display: grid;
+  gap: 10px;
+}
+.sp-row {
+  display: grid;
+  grid-template-columns: 56px 1fr 56px;
+  gap: 8px;
+  align-items: stretch;
+}
+.sp-btn {
+  min-height: 56px;
+  border-radius: 12px;
+  border: 1.5px solid var(--line);
+  background: #fff;
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--red);
+}
+.sp-btn:disabled {
+  color: var(--muted);
+  opacity: 0.5;
+}
+.sp-value {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: 1.5px solid var(--red);
+  border-radius: 12px;
+  background: #fdecee;
+  color: var(--red);
+  font-size: 26px;
+  font-weight: 800;
+}
+.sp-value input {
+  width: 3.2em;
+  border: none;
+  background: transparent;
+  text-align: center;
+  font: inherit;
+  color: inherit;
+  padding: 0;
+}
+.sp-value small {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  margin-left: 4px;
+}
 .m-steps {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

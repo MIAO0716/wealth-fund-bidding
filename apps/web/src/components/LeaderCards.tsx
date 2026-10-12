@@ -55,7 +55,7 @@ export function LeaderCard({ c, card }: { c: CardCredential; card: CardInfo }) {
         <div className="lc-step">
           <div className="lc-num">{++n}</div>
           <div className="lc-text">
-            <b>点「确认认领基础底标」；轮到本组时选择档位，点「追加」并确认</b>
+            <b>点「确认认领基础底标」；轮到本组时选择追加幅度（整数），点「追加」并确认</b>
             <span>看到「追加成功 · 服务器已确认」即完成。遇到问题请举手示意工作人员。</span>
           </div>
         </div>

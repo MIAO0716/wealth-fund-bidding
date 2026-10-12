@@ -78,32 +78,28 @@ describe('A08/A09 追加', () => {
     expect(live.body.recentBids[0]).toMatchObject({ unitName: '浦东', fromPp: 30, toPp: 35 });
   });
 
-  it('30% +10 → 40%；切换为仅 +5 后同样请求被拒绝', async () => {
+  it('每次加码为 1 的整数倍：30% +1 → 31%、+12 → 43%；快捷档位只影响按钮，不限制加码', async () => {
     const { eventId, pd } = await liveEvent();
-    const r = await bid(ctx, eventId, 'wealth', pd, { targetIncreasePp: 40, expectedBidVersion: 0 });
+    const r = await bid(ctx, eventId, 'wealth', pd, { targetIncreasePp: 31, expectedBidVersion: 0 });
     expect(r.status).toBe(201);
-    expect(r.body.receipt.toPp).toBe(40);
+    expect(r.body.receipt).toMatchObject({ fromPp: 30, toPp: 31, deltaPp: 1 });
     const cfg = await call(ctx.app, 'PATCH', `/api/v1/admin/events/${eventId}/config`, {
       cookie: ctx.adminCookie,
       body: { allowedIncrementSteps: [5] },
     });
     expect(cfg.status).toBe(200);
-    const r2 = await bid(ctx, eventId, 'wealth', pd, { targetIncreasePp: 50, expectedBidVersion: 1 });
-    expect(r2.status).toBe(422);
-    expect(r2.body.error.code).toBe('INVALID_STEP');
-    const r3 = await bid(ctx, eventId, 'wealth', pd, { targetIncreasePp: 45, expectedBidVersion: 1 });
-    expect(r3.status).toBe(201);
+    const r2 = await bid(ctx, eventId, 'wealth', pd, { targetIncreasePp: 43, expectedBidVersion: 1 });
+    expect(r2.status).toBe(201);
+    expect(r2.body.receipt).toMatchObject({ fromPp: 31, toPp: 43, deltaPp: 12 });
   });
 });
 
 describe('A10 篡改请求', () => {
-  it('32%、30%、25%、不允许差值均被服务端拒绝', async () => {
+  it('等于或低于当前值、文本、小数均被服务端拒绝', async () => {
     const { eventId, pd } = await liveEvent();
     for (const [target, code] of [
-      [32, 'INVALID_STEP'],
       [30, 'NOT_GREATER'],
       [25, 'NOT_GREATER'],
-      [55, 'INVALID_STEP'],
       ['35', 'INVALID_VALUE'],
       [35.5, 'INVALID_VALUE'],
     ] as const) {

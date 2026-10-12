@@ -146,9 +146,10 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await expect(hp.page.getByText('尚未轮到本组，请等待')).toBeVisible();
   await expect(hp.page.locator('.m-main-btn')).toBeDisabled();
 
-  // ---------------------------------------------------------- 浦东 30% 追加 +5
+  // ---------------------------------------------------------- 浦东 30% 追加 +5（快捷按钮）
   await expect(pd.page.locator('.m-current')).toContainText('30');
-  await expect(pd.page.locator('.m-main-btn')).toHaveText('追加5个百分点');
+  await pd.page.getByRole('button', { name: /^\+5\s*个百分点/ }).click();
+  await expect(pd.page.locator('.m-main-btn')).toHaveText('确认追加 +5 个百分点');
   await pd.page.locator('.m-main-btn').click();
   const modal = pd.page.locator('.modal');
   await expect(modal.locator('.m-confirm-row')).toContainText('30%');
@@ -171,13 +172,16 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await expect(screen.getByText('标王候选：浦东')).toBeVisible();
   await shot(pd.page, 'phone-bid');
 
-  // 闵行 10% → 选 +10 → 20%
-  await mh.page.getByRole('button', { name: /\+10/ }).click();
-  await expect(mh.page.locator('.m-preview')).toContainText('20%');
+  // 闵行 10% → 选 +10，再「＋」两次 → +12 → 22%（每次加码为 1 的整数倍）
+  await mh.page.getByRole('button', { name: /^\+10\s*个百分点/ }).click();
+  await mh.page.getByRole('button', { name: '增加 1 个百分点' }).click();
+  await mh.page.getByRole('button', { name: '增加 1 个百分点' }).click();
+  await expect(mh.page.getByLabel('追加百分点')).toHaveValue('12');
+  await expect(mh.page.locator('.m-preview')).toContainText('22%');
   await mh.page.locator('.m-main-btn').click();
   await mh.page.locator('.modal').getByRole('button', { name: '确认提交' }).click();
   await expect(mh.page.getByRole('heading', { name: '追加成功 · 服务器已确认' })).toBeVisible();
-  await expect(screen.locator('.s-row', { hasText: '闵行' }).locator('.s-current')).toContainText('20');
+  await expect(screen.locator('.s-row', { hasText: '闵行' }).locator('.s-current')).toContainText('22');
   await shot(screen, 'screen-live');
   await shot(admin, 'admin-control');
 

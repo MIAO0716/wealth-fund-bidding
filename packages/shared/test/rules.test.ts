@@ -49,9 +49,9 @@ describe('金额', () => {
 });
 
 describe('增幅格式', () => {
-  it('必须是 5 的整数倍的整数百分点', () => {
+  it('必须是整数百分点（1 的整数倍）', () => {
     expect(checkIncreasePpFormat(30).ok).toBe(true);
-    expect(checkIncreasePpFormat(12).ok).toBe(false);
+    expect(checkIncreasePpFormat(12).ok).toBe(true);
     expect(checkIncreasePpFormat(7.5).ok).toBe(false);
     expect(checkIncreasePpFormat('30%').ok).toBe(false);
     const r = checkIncreasePpFormat(0.3);
@@ -59,33 +59,30 @@ describe('增幅格式', () => {
     expect(!r.ok && r.reason).toContain('请填 30');
   });
 
-  it('允许档位配置校验', () => {
-    expect(normalizeAllowedSteps([10, 5, 5])).toEqual([5, 10]);
-    expect(normalizeAllowedSteps([5, 7])).toBeNull();
+  it('快捷档位配置校验：正整数、去重、升序', () => {
+    expect(normalizeAllowedSteps([10, 5, 5, 1])).toEqual([1, 5, 10]);
+    expect(normalizeAllowedSteps([5, 7])).toEqual([5, 7]);
+    expect(normalizeAllowedSteps([0])).toBeNull();
+    expect(normalizeAllowedSteps([2.5])).toBeNull();
     expect(normalizeAllowedSteps([])).toBeNull();
   });
 });
 
-describe('追加校验', () => {
-  const base = { currentPp: 30, allowedSteps: [5, 10, 15, 20], groupMinPp: 5 };
+describe('追加校验（每次加码为 1 的整数倍，组内自由加码）', () => {
+  const base = { currentPp: 30, groupMinPp: 10 };
 
-  it('+5 / +10 合法', () => {
-    expect(checkBidTarget({ ...base, targetPp: 35 })).toEqual({ ok: true, deltaPp: 5 });
+  it('任意整数加码均合法：+1、+3、+10、+25', () => {
+    expect(checkBidTarget({ ...base, targetPp: 31 })).toEqual({ ok: true, deltaPp: 1 });
+    expect(checkBidTarget({ ...base, targetPp: 33 })).toEqual({ ok: true, deltaPp: 3 });
     expect(checkBidTarget({ ...base, targetPp: 40 })).toEqual({ ok: true, deltaPp: 10 });
+    expect(checkBidTarget({ ...base, targetPp: 55 })).toEqual({ ok: true, deltaPp: 25 });
   });
 
-  it('仅 +5 配置下 +10 被拒绝', () => {
-    const r = checkBidTarget({ ...base, allowedSteps: [5], targetPp: 40 });
-    expect(r.ok).toBe(false);
-    expect(!r.ok && r.code).toBe('INVALID_STEP');
-  });
-
-  it('32、30、25 与不允许差值均被拒绝', () => {
-    expect(checkBidTarget({ ...base, targetPp: 32 })).toMatchObject({ ok: false, code: 'INVALID_STEP' });
+  it('不高于当前值、小数、低于组别底线均被拒绝', () => {
     expect(checkBidTarget({ ...base, targetPp: 30 })).toMatchObject({ ok: false, code: 'NOT_GREATER' });
     expect(checkBidTarget({ ...base, targetPp: 25 })).toMatchObject({ ok: false, code: 'NOT_GREATER' });
-    expect(checkBidTarget({ ...base, targetPp: 55 })).toMatchObject({ ok: false, code: 'INVALID_STEP' });
-    expect(checkBidTarget({ ...base, targetPp: 35.0001 })).toMatchObject({ ok: false });
+    expect(checkBidTarget({ ...base, targetPp: 30.5 })).toMatchObject({ ok: false, code: 'INVALID_VALUE' });
+    expect(checkBidTarget({ currentPp: 5, groupMinPp: 10, targetPp: 8 })).toMatchObject({ ok: false, code: 'INVALID_STEP' });
   });
 });
 
