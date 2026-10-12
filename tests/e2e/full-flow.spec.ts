@@ -79,7 +79,7 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   admin.once('dialog', (d) => void d.accept());
   await admin.getByRole('button', { name: '批量生成 16 家领导使用卡（打印）' }).click();
   await expect(admin.locator('.modal .leader-card')).toHaveCount(16);
-  await expect(admin.locator('.modal .leader-card').first()).toContainText('打开微信「扫一扫」');
+  await expect(admin.locator('.modal .leader-card').first()).toContainText('用手机自带「相机」扫右侧二维码进入（推荐）');
   await expect(admin.locator('.modal .leader-card').first()).toContainText('Meeting-5G');
   await admin.locator('.modal .leader-card').first().screenshot({ path: `${SHOTS}/leader-card.png` });
   await admin.getByRole('button', { name: '关闭（二维码不再显示）' }).click();

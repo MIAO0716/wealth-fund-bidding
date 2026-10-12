@@ -46,9 +46,9 @@ export function LeaderCard({ c, card }: { c: CardCredential; card: CardInfo }) {
         <div className="lc-step lc-main">
           <div className="lc-num">{++n}</div>
           <div className="lc-text">
-            <b>打开微信「扫一扫」，扫右侧二维码进入</b>
-            <span>扫码后自动登录{c.unitName}，无需账号密码。</span>
-            <span>二维码只能在一部手机上使用，请勿转发。</span>
+            <b>用手机自带「相机」扫右侧二维码进入（推荐）</b>
+            <span>扫码后自动登录{c.unitName}，无需账号密码。相机扫不出时可用微信「扫一扫」，提示时点「继续访问」。</span>
+            <span>二维码只能在一部手机、一个浏览器上使用；再次进入请用同样方式扫码，请勿转发。</span>
           </div>
           <img className="lc-qr lc-qr-main" src={c.qrDataUrl} alt={`${c.unitName}二维码`} />
         </div>
