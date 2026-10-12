@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ConnLine, DemoBadge, Modal } from '../components/ui';
 import { StepPicker } from '../components/StepPicker';
 import { ApiError, api, errorText, newIdempotencyKey } from '../lib/api';
-import { fmtTime, previewTargetWan, wan2 } from '../lib/format';
+import { fmtTime, previewTargetWan, wan0, wan2 } from '../lib/format';
 import { useRealtime } from '../lib/realtime';
 
 interface MeProject {
@@ -263,7 +263,7 @@ function BidMain({ eventId }: { eventId: string }) {
                 <span className="pct">%</span>
               </div>
               <div className="m-target">
-                竞标目标 <b className="num">{wan2(p.currentTargetWan)}</b> 万元
+                竞标目标 <b className="num">{wan0(p.currentTargetWan)}</b> 万元
               </div>
             </>
           ) : (
@@ -333,7 +333,7 @@ function BidMain({ eventId }: { eventId: string }) {
                 </tr>
                 <tr>
                   <td>竞标目标</td>
-                  <td className="num">{wan2(receipt.targetWan)} 万元</td>
+                  <td className="num">{wan0(receipt.targetWan)} 万元</td>
                 </tr>
                 <tr>
                   <td>确认时间</td>
@@ -354,7 +354,7 @@ function BidMain({ eventId }: { eventId: string }) {
               <span>
                 追加后 <b className="num">{newPp ?? '—'}%</b>
               </span>
-              <span className="num">目标 {wan2(newTarget)} 万元</span>
+              <span className="num">目标 {wan0(newTarget)} 万元</span>
             </div>
             <button
               className="btn btn-primary m-main-btn"
@@ -435,7 +435,7 @@ function BidMain({ eventId }: { eventId: string }) {
               </tr>
               <tr>
                 <td>竞标目标</td>
-                <td className="num">{wan2(newTarget)} 万元</td>
+                <td className="num">{wan0(newTarget)} 万元</td>
               </tr>
             </tbody>
           </table>

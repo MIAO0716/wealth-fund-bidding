@@ -14,7 +14,8 @@ import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 're
 import { useSearchParams } from 'react-router-dom';
 import { DemoBadge } from '../../components/ui';
 import { api, errorText, takeHashParam } from '../../lib/api';
-import { fmtTime, wan2 } from '../../lib/format';
+import { fmtTime, wan0 } from '../../lib/format';
+import { audioReady, playBid, playChampion, unlockAudio } from '../../lib/sound';
 import { CONN_LABEL, type ConnState, useRealtime } from '../../lib/realtime';
 
 interface PublicEvent {
@@ -24,6 +25,8 @@ interface PublicEvent {
   currentProject: ProjectCode;
   screenMode: ScreenMode;
   screenProject: ProjectCode;
+  /** 大屏声音（管理端控制） */
+  screenSound?: boolean;
 }
 
 interface LiveSnapshot {
@@ -124,34 +127,49 @@ function Stage({ children, isDemo }: { children: ReactNode; isDemo?: boolean }) 
   );
 }
 
-function useScreenTools() {
-  const [sound, setSound] = useState(false);
-  const ctxRef = useRef<AudioContext | null>(null);
-  const chime = () => {
-    if (!sound) return;
-    try {
-      const ctx = ctxRef.current ?? new AudioContext();
-      ctxRef.current = ctx;
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.type = 'sine';
-      o.frequency.setValueAtTime(880, ctx.currentTime);
-      o.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.12);
-      g.gain.setValueAtTime(0.0001, ctx.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.5);
-      o.connect(g).connect(ctx.destination);
-      o.start();
-      o.stop(ctx.currentTime + 0.55);
-    } catch {
-      // 浏览器不支持声音时忽略
-    }
-  };
+/** 大屏工具：全屏按钮、声音解锁提示、领导在线数。声音开关在管理端「现场控制」 */
+function useScreenTools(eventId: string, soundOn: boolean) {
+  const [ready, setReady] = useState(audioReady());
+  const [presence, setPresence] = useState<{ online: number; total: number } | null>(null);
+  // 浏览器要求页面先有一次点击或按键才允许播放声音
+  useEffect(() => {
+    const unlock = () => {
+      unlockAudio();
+      setTimeout(() => setReady(audioReady()), 50);
+    };
+    window.addEventListener('pointerdown', unlock);
+    window.addEventListener('keydown', unlock);
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+  }, []);
+  // 领导手机在线数：每 10 秒刷新
+  useEffect(() => {
+    let stop = false;
+    const load = () =>
+      api
+        .get<{ online: number; total: number }>(`/api/v1/screen/events/${eventId}/presence`, { timeoutMs: 8000 })
+        .then((r) => !stop && setPresence(r))
+        .catch(() => {});
+    void load();
+    const t = setInterval(load, 10_000);
+    return () => {
+      stop = true;
+      clearInterval(t);
+    };
+  }, [eventId]);
+  const soundRef = useRef(soundOn);
+  soundRef.current = soundOn;
   const tools = (
     <div className="s-tools">
-      <button className="s-tool" onClick={() => setSound((s) => !s)}>
-        {sound ? '声音：开' : '声音：关'}
-      </button>
+      {presence && (
+        <span className="s-online" title="领导手机在线数">
+          <i />
+          领导在线 <b className="num">{presence.online}</b>/{presence.total}
+        </span>
+      )}
+      {soundOn && !ready && <span className="s-tool hint">点击任意处开启声音</span>}
       <button
         className="s-tool"
         onClick={() => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()).catch(() => {})}
@@ -160,7 +178,11 @@ function useScreenTools() {
       </button>
     </div>
   );
-  return { tools, chime };
+  return {
+    tools,
+    bidSound: () => soundRef.current && playBid(),
+    championSound: () => soundRef.current && playChampion(),
+  };
 }
 
 function ConnInfo({ conn, lastSyncAt }: { conn: ConnState; lastSyncAt: number | null }) {
@@ -186,13 +208,14 @@ const STATUS_PILL: Record<string, string> = {
   LOCKED: '已锁定',
 };
 
-function Head({ title, sub, right }: { title: string; sub: ReactNode; right: ReactNode }) {
+function Head({ title, sub, right, center }: { title: string; sub: ReactNode; right: ReactNode; center?: ReactNode }) {
   return (
-    <div className="s-head">
-      <div>
+    <div className={`s-head ${center ? 'with-center' : ''}`}>
+      <div className="s-head-left">
         <div className="s-title">{title}</div>
         <div className="s-sub">{sub}</div>
       </div>
+      {center && <div className="s-head-center">{center}</div>}
       <div className="s-head-right">{right}</div>
     </div>
   );
@@ -210,17 +233,17 @@ const TRANSITION_MS = 900;
 function LiveScreen({ eventId, project }: { eventId: string; project: ProjectCode | null }) {
   const base = `/api/v1/screen/events/${eventId}`;
   const [flash, setFlash] = useState<Record<string, number>>({});
-  const [toast, setToast] = useState<{ id: number; text: string } | null>(null);
-  const { tools, chime } = useScreenTools();
-  const chimeRef = useRef(chime);
-  chimeRef.current = chime;
+  const [toast, setToast] = useState<{ id: number; text: string; champion?: boolean } | null>(null);
+  // 收到加码后等快照更新再决定播放哪种声音（是否出现新的标王候选）
+  const pendingBid = useRef(false);
   const onMessage = (m: RealtimeMessage) => {
     if ((m.type === 'BID_ACCEPTED' || m.type === 'BID_CORRECTED') && m.unitCode) {
       setFlash((f) => ({ ...f, [m.unitCode!]: m.seq }));
-      if (m.type === 'BID_ACCEPTED') chimeRef.current();
+      if (m.type === 'BID_ACCEPTED') pendingBid.current = true;
     }
   };
   const { data, conn, lastSyncAt } = useRealtime<LiveSnapshot>(`${base}/live${project ? `?project=${project}` : ''}`, `${base}/stream`, onMessage);
+  const { tools, bidSound, championSound } = useScreenTools(eventId, data?.event.screenSound !== false);
 
   // 组切换转场：旧组淡出左移，新组从右侧滑入
   const focusNo = data?.published ? focusGroupNo(data.project) : null;
@@ -237,18 +260,32 @@ function LiveScreen({ eventId, project }: { eventId: string; project: ProjectCod
     setShown(focusNo);
   }, [focusNo]);
 
-  // 领先变化轻提示（只提示当前展示的组）
+  // 领先变化轻提示（只提示进行中的组）；出现新的标王候选时播放标王音效，否则播放普通加码音
   const prevTop = useRef<Record<number, string>>({});
+  const prevChampion = useRef<Record<number, string>>({});
   useEffect(() => {
     if (!data?.published) return;
+    let newChampion = false;
     for (const g of data.groups) {
       const key = g.topUnitCodes.join(',');
+      const champ = g.leaderStatus === 'CHAMPION_CANDIDATE' ? key : '';
       const prev = prevTop.current[g.groupNo];
-      if (prev !== undefined && prev !== key && data.project.status === 'LIVE' && g.status === 'OPEN' && g.topUnitCodes.length) {
-        const names = g.rows.filter((r) => g.topUnitCodes.includes(r.unitCode)).map((r) => r.unitName).join('、');
+      const prevChamp = prevChampion.current[g.groupNo];
+      const live = data.project.status === 'LIVE' && g.status === 'OPEN';
+      const names = g.rows.filter((r) => g.topUnitCodes.includes(r.unitCode)).map((r) => r.unitName).join('、');
+      if (prevChamp !== undefined && champ && champ !== prevChamp && live) {
+        newChampion = true;
+        setToast({ id: Date.now(), text: `新标王候选：${names} ${g.topPp}%`, champion: true });
+      } else if (prev !== undefined && prev !== key && live && g.topUnitCodes.length) {
         setToast({ id: Date.now(), text: `${g.name}领先：${names} ${g.topPp}%` });
       }
       prevTop.current[g.groupNo] = key;
+      prevChampion.current[g.groupNo] = champ;
+    }
+    if (pendingBid.current) {
+      pendingBid.current = false;
+      if (newChampion) championSound();
+      else bidSound();
     }
   }, [data]);
 
@@ -265,17 +302,13 @@ function LiveScreen({ eventId, project }: { eventId: string; project: ProjectCod
   const leavingGroup = leaving !== null ? data.groups.find((g) => g.groupNo === leaving) : undefined;
   const focusUnits = new Set(focus?.rows.map((r) => r.unitCode) ?? []);
   const feed = data.recentBids.filter((b) => focusUnits.has(b.unitCode));
-  const sub = (
-    <>
-      <span>{PROJECT_NAMES[p.projectCode]}专场</span>
-      {focus && <span>{focus.name}</span>}
-    </>
-  );
+  const sub = <>{focus && <span>{focus.name}</span>}</>;
   return (
     <Stage isDemo={data.event.isDemo}>
       <Head
         title={data.event.name || '现场竞标'}
         sub={sub}
+        center={<span className={`s-project ${p.projectCode}`}>{PROJECT_NAMES[p.projectCode]}专场</span>}
         right={
           <>
             <span className={`s-pill ${p.status === 'LIVE' ? 'live' : ''}`}>{STATUS_PILL[p.status]}</span>
@@ -285,7 +318,7 @@ function LiveScreen({ eventId, project }: { eventId: string; project: ProjectCod
       />
       <OfflineAlert conn={conn} />
       {toast && (
-        <div className="s-toast" key={toast.id}>
+        <div className={`s-toast ${toast.champion ? 'champion' : ''}`} key={toast.id}>
           {toast.text}
         </div>
       )}
@@ -408,8 +441,9 @@ function FocusPanel({ g, flash, className }: { g: GroupBoard; flash: Record<stri
               <span className="s-current num">
                 {r.currentPp}
                 <span className="pct">%</span>
+                {closed && r.currentPp > r.firstRoundPp && <span className="s-added up">+{r.currentPp - r.firstRoundPp}</span>}
               </span>
-              {withAmounts && <span className="s-target num">{wan2(r.targetWan)}</span>}
+              {withAmounts && <span className="s-target num">{wan0(r.targetWan)}</span>}
             </div>
           );
         })}
@@ -422,7 +456,7 @@ function FocusPanel({ g, flash, className }: { g: GroupBoard; flash: Record<stri
 
 function FirstRoundScreen({ eventId, project }: { eventId: string; project: ProjectCode | null }) {
   const base = `/api/v1/screen/events/${eventId}`;
-  const { tools } = useScreenTools();
+  const { tools } = useScreenTools(eventId, false);
   // 未指定项目时以当前专场为准
   const live = useRealtime<LiveSnapshot>(project ? null : `${base}/live`, project ? null : `${base}/stream`);
   const projectCode = project ?? live.data?.event.currentProject ?? null;
@@ -436,6 +470,7 @@ function FirstRoundScreen({ eventId, project }: { eventId: string; project: Proj
     <Stage isDemo={data.event.isDemo}>
       <Head
         title={data.event.name || '现场竞标'}
+        center={<span className={`s-project ${b.projectCode}`}>{PROJECT_NAMES[b.projectCode]}专场</span>}
         sub={
           <>
             <span>{PROJECT_NAMES[b.projectCode]} · 会前首轮结果</span>
@@ -488,7 +523,7 @@ function FirstRoundScreen({ eventId, project }: { eventId: string; project: Proj
                   >
                     <span className="s-rank num">{r.rank ?? '—'}</span>
                     <span className="s-unit">{r.unitName}</span>
-                    <span className="s-first num">{r.targetWan ? wan2(r.targetWan) : ""}</span>
+                    <span className="s-first num">{r.targetWan ? wan0(r.targetWan) : ''}</span>
                     {r.firstRoundPp === null ? (
                       <span className="s-missing">待录入</span>
                     ) : (
@@ -519,12 +554,17 @@ function FirstRoundScreen({ eventId, project }: { eventId: string; project: Proj
 
 function ResultsScreen({ eventId }: { eventId: string }) {
   const base = `/api/v1/screen/events/${eventId}`;
-  const { tools } = useScreenTools();
+  const { tools } = useScreenTools(eventId, false);
   const { data, conn, lastSyncAt } = useRealtime<ResultsSnapshot>(`${base}/results`, `${base}/stream`);
   if (!data) return <Stage>{null}</Stage>;
   return (
     <Stage isDemo={data.event.isDemo}>
-      <Head title={data.event.name || '现场竞标'} sub={<span>现场竞标结果</span>} right={tools} />
+      <Head
+        title={data.event.name || '现场竞标'}
+        sub={<span>理财、基金 · 各组最终结果</span>}
+        center={<span className="s-project">现场竞标结果</span>}
+        right={tools}
+      />
       <OfflineAlert conn={conn} />
       <div className="s-results">
         {(['wealth', 'fund'] as ProjectCode[]).map((pc) => {
@@ -541,16 +581,25 @@ function ResultsScreen({ eventId }: { eventId: string }) {
                         {g.leaderStatus === 'CHAMPION_CANDIDATE' ? '现场标王' : g.leaderStatus === 'TIED_PENDING' ? '并列·待确认' : '未达30%门槛'}
                       </span>
                     </h3>
+                    <div className={`s-result-row head ${g.rows[0]?.targetWan !== undefined ? 'with-target' : ''}`}>
+                      <span />
+                      <span>单位</span>
+                      <span className="first">首轮</span>
+                      <span className="added">加码</span>
+                      <span className="final">最终</span>
+                      {g.rows[0]?.targetWan !== undefined && <span className="target">目标（万元）</span>}
+                    </div>
                     {g.rows.map((r) => (
                       <div className={`s-result-row ${r.isTop ? 'top' : ''} ${r.targetWan !== undefined ? 'with-target' : ''}`} key={r.unitCode}>
                         <span className="num">{r.rank}</span>
                         <span className="name">
                           {r.unitName}
-                          {r.leaderLabel === '现场标王' && <span className="s-badge" style={{ marginLeft: 8 }}>现场标王</span>}
+                          {r.leaderLabel === '现场标王' && <span className="s-badge" style={{ marginLeft: 8 }}>标王</span>}
                         </span>
-                        <span className="first num">首轮 {r.firstRoundPp}%</span>
+                        <span className="first num">{r.firstRoundPp}%</span>
+                        <span className={`added num ${r.addedPp > 0 ? 'up' : ''}`}>{r.addedPp > 0 ? `+${r.addedPp}` : '—'}</span>
                         <span className="final num">{r.finalPp}%</span>
-                        {r.targetWan !== undefined && <span className="target num">{wan2(r.targetWan)}万</span>}
+                        {r.targetWan !== undefined && <span className="target num">{wan0(r.targetWan)}</span>}
                       </div>
                     ))}
                   </div>

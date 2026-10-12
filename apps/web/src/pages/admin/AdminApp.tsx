@@ -4,6 +4,7 @@ import { Link, Route, Routes, useNavigate } from 'react-router-dom';
 import { ApiError, api, errorText } from '../../lib/api';
 import { fmtTime } from '../../lib/format';
 import { EventPage } from './EventPage';
+import { Modal } from '../../components/ui';
 
 export interface AdminInfo {
   admin: { id: string; displayName: string };
@@ -103,6 +104,8 @@ function EventList() {
   const [err, setErr] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
+  const [toDelete, setToDelete] = useState<EventSummary | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = () =>
     api
@@ -147,6 +150,7 @@ function EventList() {
       </div>
       <div className="a-card">
         <h3>活动列表</h3>
+        {notice && <div className="notice success" style={{ marginBottom: 10 }}>{notice}</div>}
         {!events ? (
           <p className="muted">加载中…</p>
         ) : events.length === 0 ? (
@@ -175,9 +179,14 @@ function EventList() {
                   <td>{e.currentProject === 'wealth' ? '理财' : '基金'}</td>
                   <td>{fmtTime(e.createdAt, true)}</td>
                   <td className="r">
-                    <Link className="btn btn-sm" to={`/admin/events/${e.id}`}>
-                      进入
-                    </Link>
+                    <div className="a-row" style={{ justifyContent: 'flex-end', gap: 4 }}>
+                      <Link className="btn btn-sm" to={`/admin/events/${e.id}`}>
+                        进入
+                      </Link>
+                      <button className="btn btn-sm btn-danger-outline" onClick={() => setToDelete(e)}>
+                        删除
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -185,6 +194,69 @@ function EventList() {
           </table>
         )}
       </div>
+      {toDelete && (
+        <DeleteEventModal
+          ev={toDelete}
+          onClose={() => setToDelete(null)}
+          onDone={(n) => {
+            setToDelete(null);
+            setNotice(`已删除活动「${n}」及其全部数据`);
+            void load();
+          }}
+        />
+      )}
     </>
+  );
+}
+
+function DeleteEventModal({ ev, onClose, onDone }: { ev: EventSummary; onClose: () => void; onDone: (name: string) => void }) {
+  const [checked, setChecked] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const name = ev.config.name || '（未命名）';
+  return (
+    <Modal
+      title={`删除活动：${name}`}
+      onClose={busy ? undefined : onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose} disabled={busy}>
+            取消
+          </button>
+          <button
+            className="btn btn-danger-outline"
+            disabled={!checked || busy}
+            onClick={async () => {
+              setBusy(true);
+              setErr(null);
+              try {
+                await api.post(`/api/v1/admin/events/${ev.id}/delete`, { confirm: true }, { timeoutMs: 60_000 });
+                onDone(name);
+              } catch (e) {
+                setErr(errorText(e));
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {busy ? '删除中…' : '确认删除'}
+          </button>
+        </>
+      }
+    >
+      <p style={{ marginTop: 0 }}>
+        将删除该{ev.isDemo ? '演示' : '正式'}活动及其<b>全部数据</b>：首轮数据、竞标流水与结果、二维码、大屏链接、金山文档绑定和操作记录。<b>删除后不可恢复。</b>
+      </p>
+      {!ev.isDemo && <p className="small muted">如需留档，请先进入活动「导出与备份」导出 Excel 台账。竞标进行中的活动不能删除。</p>}
+      <label className="a-row">
+        <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
+        我确认删除「{name}」及其全部数据
+      </label>
+      {err && (
+        <div className="notice" style={{ marginTop: 10 }}>
+          {err}
+        </div>
+      )}
+    </Modal>
   );
 }

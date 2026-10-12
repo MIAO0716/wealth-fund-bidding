@@ -22,6 +22,7 @@ import {
   archiveEvent,
   configProblems,
   createEvent,
+  deleteEvent,
   getEventRow,
   listEvents,
   readConfig,
@@ -89,6 +90,13 @@ export function registerAdminRoutes(api: FastifyInstance, deps: AppDeps): void {
   });
 
   api.post<{ Params: P }>('/admin/events/:eventId/archive', auth, async (req) => (await archiveEvent(ctx, req.params.eventId, actor(req))).body);
+
+  /** 删除活动及其全部数据（不可恢复）；竞标进行中不能删除 */
+  api.post<{ Params: P }>('/admin/events/:eventId/delete', auth, async (req) => {
+    const r = await deleteEvent(ctx, req.params.eventId, actor(req), body(req));
+    await deps.kdocs.sync.refresh(req.params.eventId);
+    return r;
+  });
 
   /** 正式开启前检查：配置、首轮完整性、二维码发放 */
   api.get<{ Params: P }>('/admin/events/:eventId/readiness', auth, async (req) =>
@@ -241,7 +249,10 @@ export function registerAdminRoutes(api: FastifyInstance, deps: AppDeps): void {
 
   // ------------------------------------------------------------ 单位二维码与会话
 
-  api.get<{ Params: P }>('/admin/events/:eventId/units', auth, async (req) => ({ units: await unitAccessStatus(ctx.db, req.params.eventId) }));
+  api.get<{ Params: P }>('/admin/events/:eventId/units', auth, async (req) => {
+    const online = new Set(hub.onlineUnits(req.params.eventId));
+    return { units: (await unitAccessStatus(ctx.db, req.params.eventId)).map((u) => ({ ...u, online: online.has(u.unitCode) })) };
+  });
 
   /** 领导使用卡附带的信息：活动名称、Wi-Fi 二维码（如已配置） */
   const cardInfo = async (eventId: string) => {
@@ -251,12 +262,13 @@ export function registerAdminRoutes(api: FastifyInstance, deps: AppDeps): void {
 
   api.post<{ Params: P }>('/admin/events/:eventId/units/:unitCode/credentials', auth, async (req) => ({
     ...(await issueUnitCredential(ctx, req.params.eventId, actor(req), parseUnit(req.params.unitCode), {
+      renew: body<{ renew?: boolean }>(req).renew === true,
       revokeSessions: body<{ revokeSessions?: boolean }>(req).revokeSessions === true,
     })),
     card: await cardInfo(req.params.eventId),
   }));
 
-  /** 一次为 16 家生成二维码（用于打印）；会作废此前的二维码（已登录的手机不受影响） */
+  /** 显示 16 家领导使用卡（用于打印）：已有二维码的沿用同一个，没有的才生成；活动期间二维码不变 */
   api.post<{ Params: P }>('/admin/events/:eventId/credentials/batch', auth, async (req) => {
     const out = [];
     for (const u of UNITS) out.push(await issueUnitCredential(ctx, req.params.eventId, actor(req), u.code));

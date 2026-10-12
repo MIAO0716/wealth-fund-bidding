@@ -13,6 +13,8 @@ import type { Db } from '../db/pool';
 import type { Role } from './auth';
 
 export const HEARTBEAT_MS = 15_000;
+/** 手机断开后在这段时间内仍计为在线（锁屏、切后台、网络抖动的短暂断开不算掉线） */
+export const PRESENCE_GRACE_MS = 60_000;
 const SAFETY_POLL_MS = 3_000;
 
 export interface Subscriber {
@@ -50,6 +52,8 @@ export function visibleTo(role: Role, unitCode: string | null, row: Pick<Row, 'a
 
 export class RealtimeHub {
   private subs = new Map<number, Subscriber>();
+  /** 领导手机在线情况：活动 → 单位 → 当前连接与最近断开时间 */
+  private presence = new Map<string, Map<string, { conns: Set<number>; lastSeen: number }>>();
   private nextId = 1;
   private listener: pg.Client | null = null;
   private timers: NodeJS.Timeout[] = [];
@@ -111,12 +115,35 @@ export class RealtimeHub {
     }
     sub.send('hello', { headSeq: head, serverTime: new Date().toISOString(), heartbeatMs: HEARTBEAT_MS });
     this.subs.set(sub.id, sub);
+    if (sub.role === 'BIDDER' && sub.unitCode) {
+      let units = this.presence.get(sub.eventId);
+      if (!units) this.presence.set(sub.eventId, (units = new Map()));
+      let p = units.get(sub.unitCode);
+      if (!p) units.set(sub.unitCode, (p = { conns: new Set(), lastSeen: 0 }));
+      p.conns.add(sub.id);
+    }
     this.pump(sub);
     return sub;
   }
 
   unsubscribe(sub: Subscriber): void {
     this.subs.delete(sub.id);
+    this.release(sub, Date.now());
+  }
+
+  /** 连接结束：普通断开保留宽限期；会话失效（被顶下线、强制下线）立即不算在线 */
+  private release(sub: Subscriber, lastSeen: number): void {
+    if (sub.role !== 'BIDDER' || !sub.unitCode) return;
+    const p = this.presence.get(sub.eventId)?.get(sub.unitCode);
+    if (!p || !p.conns.delete(sub.id)) return;
+    p.lastSeen = Math.max(p.lastSeen, lastSeen);
+  }
+
+  /** 当前在线的领导单位（有实时连接，或断开不足宽限期） */
+  onlineUnits(eventId: string, now = Date.now()): string[] {
+    const units = this.presence.get(eventId);
+    if (!units) return [];
+    return [...units.entries()].filter(([, p]) => p.conns.size > 0 || now - p.lastSeen < PRESENCE_GRACE_MS).map(([code]) => code);
   }
 
   stats() {
@@ -176,6 +203,7 @@ export class RealtimeHub {
           if (!r.rows[0]?.session_ok) {
             // 会话已失效：不再推送，通知客户端后关闭（重连时会重新鉴权）
             this.subs.delete(sub.id);
+            this.release(sub, 0);
             sub.send('revoked', { reason: 'SESSION_INVALID' });
             sub.close();
             return;

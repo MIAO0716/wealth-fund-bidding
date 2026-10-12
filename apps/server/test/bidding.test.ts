@@ -380,19 +380,21 @@ describe('A17 浦东改请求冒充闵行', () => {
     expect((await call(ctx.app, 'GET', `/api/v1/bidder/events/${eventId}/me`, { cookie: newCookie })).status).toBe(401);
     expect((await ex()).statusCode).toBe(200);
 
-    // 作废：二维码不能再用（含已扫过的），需重新发放
+    // 二维码活动期间固定不变：再次显示得到同一个二维码
+    const again = await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/units/PD/credentials`, { cookie: ctx.adminCookie, body: {} });
+    expect(again.body.joinUrl).toBe(issued.body.joinUrl);
+    const batch = await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/credentials/batch`, { cookie: ctx.adminCookie, body: {} });
+    expect(batch.body.credentials.find((c: any) => c.unitCode === 'PD').joinUrl).toBe(issued.body.joinUrl);
+    expect(batch.body.credentials).toHaveLength(16);
+    // 有效期至少覆盖活动当天（测试活动日期 2099-12-31）
+    expect(new Date(again.body.expiresAt).getTime()).toBeGreaterThan(new Date('2099-12-31T00:00:00+08:00').getTime());
+    expect((await ex()).statusCode).toBe(200);
+
+    // 接口保留的「作废」：二维码不能再用（含已扫过的）
     await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/units/PD/revoke`, { cookie: ctx.adminCookie, body: {} });
     const after = await ex();
     expect(after.statusCode).toBe(401);
     expect(JSON.parse(after.body).error.details).toMatchObject({ unitName: '浦东', reason: 'REVOKED' });
-    // 重新发放后旧二维码（即使扫过）也作废
-    const re = await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/units/PD/credentials`, { cookie: ctx.adminCookie, body: {} });
-    const token2 = new URL(re.body.joinUrl).hash.replace('#t=', '');
-    const ex2 = await ctx.app.inject({ method: 'POST', url: '/api/v1/auth/bidder/exchange', headers: { 'x-bidding-client': '1' }, payload: { token: token2 } });
-    expect(ex2.statusCode).toBe(200);
-    await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/units/PD/credentials`, { cookie: ctx.adminCookie, body: {} });
-    const ex3 = await ctx.app.inject({ method: 'POST', url: '/api/v1/auth/bidder/exchange', headers: { 'x-bidding-client': '1' }, payload: { token: token2 } });
-    expect(ex3.statusCode).toBe(401);
   });
 
   it('缺少客户端请求头的写请求被拒绝', async () => {

@@ -148,6 +148,7 @@ function publicEvent(ev: ReturnType<typeof toSummary>) {
     currentProject: ev.currentProject,
     screenMode: ev.screenMode,
     screenProject: ev.screenProject,
+    screenSound: ev.config.screenSound,
   };
 }
 

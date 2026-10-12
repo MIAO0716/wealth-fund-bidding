@@ -1,4 +1,4 @@
-/** 自动检查点：首轮发布、项目锁定后调用 pg_dump 生成可恢复备份（配置 BACKUP_DIR 时启用） */
+/** 自动检查点：首轮冻结、项目锁定后及删除活动前调用 pg_dump 生成可恢复备份（配置 BACKUP_DIR 时启用） */
 
 import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
@@ -11,6 +11,8 @@ const LABEL_WORDS: Array<[string, string]> = [
   ['首轮发布', 'round1-published'],
   ['项目锁定', 'locked'],
   ['手动检查点', 'manual'],
+  ['首轮冻结', 'round1-frozen'],
+  ['删除前', 'before-delete'],
 ];
 
 export function asciiLabel(label: string): string {
@@ -20,9 +22,10 @@ export function asciiLabel(label: string): string {
 }
 
 export function makeCheckpointer(config: AppConfig, db: Db, log: (msg: string, err?: unknown) => void) {
-  return (eventId: string, label: string) => {
-    if (!config.backupDir) return;
-    void (async () => {
+  // 返回的 Promise 在检查点完成（或失败已记录）后结束；一般调用方不必等待，删除活动前会等待
+  return (eventId: string, label: string): Promise<void> => {
+    if (!config.backupDir) return Promise.resolve();
+    return (async () => {
       // 文件名只用 ASCII：Windows 非中文区域设置下 pg_dump 无法打开含中文的路径
       const safeLabel = asciiLabel(label);
       const file = join(config.backupDir, `checkpoint-${shanghaiDateCompact()}-${eventId.slice(0, 8)}-${safeLabel}.dump`);

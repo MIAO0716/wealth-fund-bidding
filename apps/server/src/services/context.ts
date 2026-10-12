@@ -16,7 +16,7 @@ export interface AppContext {
   db: Db;
   config: AppConfig;
   /** 首轮发布、项目锁定后的检查点钩子（备份） */
-  onCheckpoint?: (eventId: string, label: string) => void;
+  onCheckpoint?: (eventId: string, label: string) => void | Promise<void>;
   log?: (msg: string, err?: unknown) => void;
 }
 

@@ -2,7 +2,7 @@ import type { FirstRoundBoard, ImportValidationResult, ProjectCode, ProjectView 
 import { useEffect, useRef, useState } from 'react';
 import { Modal } from '../../components/ui';
 import { api, errorText, newIdempotencyKey } from '../../lib/api';
-import { fmtTime, wan2 } from '../../lib/format';
+import { fmtTime, wan0, wan2 } from '../../lib/format';
 import type { TabProps } from './EventPage';
 
 interface DraftRow {
@@ -176,7 +176,7 @@ export function FirstRoundTab({ eventId, state }: TabProps) {
                   </td>
                   <td className="r num">{r.baseTargetWan ? wan2(r.baseTargetWan) : <span className="muted">待录入</span>}</td>
                   <td className="r num">{r.firstRoundPp !== null ? `${r.firstRoundPp}%` : <span className="muted">待录入</span>}</td>
-                  <td className="r num">{wan2(r.targetWan)}</td>
+                  <td className="r num">{wan0(r.targetWan)}</td>
                   <td className="small">{r.remark}</td>
                   <td className="small muted">{r.updatedAt ? `${fmtTime(r.updatedAt, true)} ${r.updatedBy ?? ''}` : ''}</td>
                   <td className="r">
@@ -338,7 +338,7 @@ function ValidationModal({ v, busy, onCancel, onCommit }: { v: ImportValidationR
                 </td>
                 <td className="r num">{r.baseTargetWan ?? '—'}</td>
                 <td className="r num">{r.firstRoundIncreasePp !== null ? `${r.firstRoundIncreasePp}%` : '—'}</td>
-                <td className="r num">{wan2(r.previewTargetWan)}</td>
+                <td className="r num">{wan0(r.previewTargetWan)}</td>
                 <td className="small">
                   {r.action === 'UPDATE' && r.previous
                     ? `原 ${r.previous.baseTargetWan ?? '空'} / ${r.previous.firstRoundIncreasePp ?? '空'}%`

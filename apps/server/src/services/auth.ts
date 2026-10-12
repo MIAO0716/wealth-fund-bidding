@@ -179,20 +179,48 @@ export interface IssuedCredential {
   expiresAt: string;
 }
 
-/** 为单位（重新）发放二维码：作废该单位此前的全部二维码；可选同时让已登录的手机下线 */
+/** 二维码有效期：至少覆盖活动当天，且不短于配置的有效小时数 */
+function credentialExpiry(cfg: { qrValidHours: number; eventDate: string | null }): Date {
+  const byHours = Date.now() + cfg.qrValidHours * 3600_000;
+  const eventEnd = cfg.eventDate ? (endOfShanghaiDay(cfg.eventDate)?.getTime() ?? 0) : 0;
+  return new Date(Math.max(byHours, eventEnd));
+}
+
+/**
+ * 领导二维码：每家单位一个固定二维码，活动期间不变。
+ * 已有有效二维码时直接返回同一个（可随时再次显示、打印）；没有时才生成。
+ * renew=true 时（仅接口保留，管理端界面不提供）作废旧码并重新生成。
+ */
 export async function issueUnitCredential(
   ctx: AppContext,
   eventId: string,
   actor: Actor,
   unitCode: string,
-  opts: { revokeSessions?: boolean } = {},
+  opts: { renew?: boolean; revokeSessions?: boolean } = {},
 ) {
   const unit = UNIT_BY_CODE.get(unitCode);
   if (!unit) throw bizError('NOT_FOUND', '单位不存在');
-  const token = randomToken();
   const res = await runWrite(ctx, eventId, actor, { operation: 'ISSUE_CREDENTIAL' }, async (tx, ev) => {
-    const cfg = readConfig(ev);
-    const expiresAt = new Date(Date.now() + cfg.qrValidHours * 3600_000);
+    if (!opts.renew) {
+      const cur = await tx.query<{ id: string; token: string; expires_at: Date }>(
+        `SELECT id, token, expires_at FROM unit_credentials
+          WHERE event_id = $1 AND unit_code = $2 AND revoked_at IS NULL AND token IS NOT NULL AND expires_at > now()
+          ORDER BY created_at DESC LIMIT 1`,
+        [eventId, unitCode],
+      );
+      if (cur.rowCount) {
+        // 同一个二维码：活动日期调整到更晚时顺延有效期，二维码本身不变
+        const c = cur.rows[0];
+        const wanted = credentialExpiry(readConfig(ev));
+        if (wanted.getTime() > new Date(c.expires_at).getTime()) {
+          await tx.query('UPDATE unit_credentials SET expires_at = $2 WHERE id = $1', [c.id, wanted]);
+          return { body: { token: c.token, expiresAt: wanted } };
+        }
+        return { body: { token: c.token, expiresAt: c.expires_at } };
+      }
+    }
+    const token = randomToken();
+    const expiresAt = credentialExpiry(readConfig(ev));
     await tx.query(
       `UPDATE unit_credentials SET revoked_at = now() WHERE event_id = $1 AND unit_code = $2 AND revoked_at IS NULL`,
       [eventId, unitCode],
@@ -205,24 +233,24 @@ export async function issueUnitCredential(
       );
     }
     await tx.query(
-      `INSERT INTO unit_credentials (id, event_id, unit_code, token_hash, expires_at, created_by) VALUES ($1, $2, $3, $4, $5, $6)`,
-      [uuid(), eventId, unitCode, sha256(token), expiresAt, actor.id],
+      `INSERT INTO unit_credentials (id, event_id, unit_code, token_hash, token, expires_at, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [uuid(), eventId, unitCode, sha256(token), token, expiresAt, actor.id],
     );
     const seq = await emit(tx, eventId, { type: 'SESSION_CHANGED', audience: 'ADMIN', unitCode, data: { action: 'ISSUED' } });
     await audit(tx, eventId, actor, 'CREDENTIAL_ISSUED', {
       unitCode,
-      details: { revokeSessions: !!opts.revokeSessions, expiresAt: expiresAt.toISOString() },
+      details: { renew: !!opts.renew, revokeSessions: !!opts.revokeSessions, expiresAt: expiresAt.toISOString() },
       eventSequence: seq,
     });
-    return { body: { expiresAt } };
+    return { body: { token, expiresAt } };
   });
-  const url = joinUrl(ctx.config.publicBaseUrl, token);
+  const url = joinUrl(ctx.config.publicBaseUrl, res.body.token);
   return {
     unitCode,
     unitName: unit.name,
     joinUrl: url,
     qrDataUrl: await qrDataUrl(url),
-    expiresAt: res.body.expiresAt.toISOString(),
+    expiresAt: new Date(res.body.expiresAt).toISOString(),
   } satisfies IssuedCredential;
 }
 

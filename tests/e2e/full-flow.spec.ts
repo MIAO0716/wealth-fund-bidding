@@ -72,13 +72,19 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   // 领导使用卡：配置会场 Wi-Fi 后批量生成，卡上印 Wi-Fi 二维码、单位二维码与三步说明
   await req.patch(`/api/v1/admin/events/${eventId}/config`, { headers: H, data: { wifiSsid: 'Meeting-5G', wifiPassword: '12345678' } });
   await admin.goto(`/admin/events/${eventId}/access`);
-  admin.once('dialog', (d) => void d.accept());
-  await admin.getByRole('button', { name: '批量生成 16 家领导使用卡（打印）' }).click();
+  await admin.getByRole('button', { name: '16 家领导使用卡（生成 / 打印）' }).click();
   await expect(admin.locator('.modal .leader-card')).toHaveCount(16);
   await expect(admin.locator('.modal .leader-card').first()).toContainText('用手机自带「相机」扫右侧二维码进入（推荐）');
   await expect(admin.locator('.modal .leader-card').first()).toContainText('Meeting-5G');
   await admin.locator('.modal .leader-card').first().screenshot({ path: `${SHOTS}/leader-card.png` });
-  await admin.getByRole('button', { name: '关闭（二维码不再显示）' }).click();
+  // 二维码活动期间固定不变：再次打开是同一个二维码
+  const firstCard = await admin.locator('.modal .leader-card').first().innerHTML();
+  await admin.getByRole('button', { name: '关闭', exact: true }).click();
+  await admin.getByRole('button', { name: '16 家领导使用卡（生成 / 打印）' }).click();
+  await expect(admin.locator('.modal .leader-card')).toHaveCount(16);
+  expect(await admin.locator('.modal .leader-card').first().innerHTML()).toBe(firstCard);
+  await admin.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(admin.getByRole('button', { name: '作废' })).toHaveCount(0);
 
   // 大屏链接与二维码
   const key = await (await req.post(`/api/v1/admin/events/${eventId}/screen-keys`, { headers: H, data: { label: '主屏' } })).json();
@@ -152,7 +158,7 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   const modal = pd.page.locator('.modal');
   await expect(modal.locator('.m-confirm-row')).toContainText('30%');
   await expect(modal.locator('.m-confirm-row')).toContainText('35%');
-  await expect(modal).toContainText('135.00 万元');
+  await expect(modal).toContainText('135 万元');
   await expect(modal).toContainText('确认后不可自行下调');
   await shot(pd.page, 'phone-confirm');
   const t0 = Date.now();
@@ -164,7 +170,10 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   const pdRow = screen.locator('.s-prow', { hasText: '浦东' });
   await expect(pdRow.locator('.s-current')).toContainText('35');
   // 目标金额随增幅实时计算：100 万 × 1.35
-  await expect(pdRow.locator('.s-target')).toHaveText('135.00');
+  await expect(pdRow.locator('.s-target')).toHaveText('135');
+  // 专场字样居中显示；右上角显示领导在线数
+  await expect(screen.locator('.s-head-center')).toHaveText('理财专场');
+  await expect(screen.locator('.s-online')).toContainText(/领导在线 \d+\/16/);
   const latency = Date.now() - t0;
   console.log(`浦东点击确认 → 大屏显示 35% 用时 ${latency} ms`);
   expect(latency).toBeLessThan(3000);
@@ -189,7 +198,7 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await admin.locator('.board-group.open tr', { hasText: '闵行' }).getByRole('button', { name: '代录' }).click();
   await admin.getByRole('button', { name: '下调更正（误操作）' }).click();
   await admin.getByLabel('更正后的增幅').fill('15');
-  await expect(admin.locator('.modal')).toContainText('115.00 万元');
+  await expect(admin.locator('.modal')).toContainText('115 万元');
   await admin.getByRole('button', { name: '确认下调为 15%' }).click();
   await expect(admin.getByText(/已更正 闵行 22% → 15%/)).toBeVisible();
   await expect(screen.locator('.s-prow', { hasText: '闵行' }).locator('.s-current')).toContainText('15');
@@ -214,6 +223,7 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await expect(screen.locator('.s-panel-state')).toHaveText('本组竞标结束 · 最终结果');
   await expect(screen.locator('.s-prow.top')).toContainText('浦东');
   await expect(screen.getByText('本组标王：浦东')).toBeVisible();
+  await screen.waitForTimeout(1000); // 等入场动画结束再截图
   await shot(screen, 'screen-group-final');
   for (let g = 0; g < 2; g++) {
     await admin.getByRole('button', { name: '开放本组' }).first().click();
@@ -236,7 +246,10 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   // 结果大屏
   await admin.getByRole('button', { name: '最终结果' }).click();
   await expect(screen.locator('.s-result-project').first()).toContainText('现场标王');
+  // 最终结果显示首轮到最终的加码：浦东 30% → 35%（+5）
+  await expect(screen.locator('.s-result-row.top', { hasText: '浦东' }).locator('.added')).toHaveText('+5');
   await expect(screen.locator('.s-result-row.top', { hasText: '浦东' })).toContainText('35%');
+  await screen.waitForTimeout(1000); // 等入场动画结束再截图
   await shot(screen, 'screen-results');
 
   // ---------------------------------------------------------- 基金：首轮已在会前冻结，理财锁定后手机自动转到基金
@@ -298,4 +311,24 @@ test('会话失效与非法入口有明确提示', async ({ browser }) => {
   await expect(sp.getByText('请使用管理端生成的大屏链接打开本页面')).toBeVisible();
   await ctx.close();
   await s.close();
+});
+
+test('活动列表删除活动：弹窗确认后连同数据一并删除', async ({ browser }) => {
+  const adminCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const req = adminCtx.request;
+  expect((await req.post('/api/v1/auth/admin/login', { headers: H, data: { username: 'admin', password: 'e2e-password-123' } })).ok()).toBe(true);
+  const ev = await (await req.post('/api/v1/admin/events', { headers: H, data: { config: { name: '待删除的测试活动', eventDate: '2099-12-31' } } })).json();
+  const page = await adminCtx.newPage();
+  await page.goto('/admin');
+  const row = page.locator('tr', { hasText: '待删除的测试活动' });
+  await row.getByRole('button', { name: '删除' }).click();
+  const modal = page.locator('.modal');
+  await expect(modal).toContainText('删除后不可恢复');
+  await expect(modal.getByRole('button', { name: '确认删除' })).toBeDisabled();
+  await modal.getByLabel('我确认删除「待删除的测试活动」及其全部数据').check();
+  await modal.getByRole('button', { name: '确认删除' }).click();
+  await expect(page.getByText('已删除活动「待删除的测试活动」及其全部数据')).toBeVisible();
+  await expect(page.locator('tr', { hasText: '待删除的测试活动' })).toHaveCount(0);
+  expect((await req.get(`/api/v1/admin/events/${ev.event.id}/state`, { headers: H })).status()).toBe(404);
+  await adminCtx.close();
 });

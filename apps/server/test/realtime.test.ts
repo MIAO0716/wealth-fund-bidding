@@ -217,6 +217,27 @@ describe('FIX-04 实时连接随访问权限失效', () => {
     await fresh.close();
   });
 
+  it('大屏在线数：有实时连接的领导计为在线；断开 1 分钟内仍计在线；被强制下线立即不计', async () => {
+    const { eventId, pd, mh, screen } = await prepared();
+    const presence = async () => (await call(ctx.app, 'GET', `/api/v1/screen/events/${eventId}/presence`, { cookie: screen })).body;
+    expect(await presence()).toEqual({ online: 0, total: 16 });
+    const a = await pdStream(eventId, pd);
+    const b = await pdStream(eventId, mh);
+    await waitFor(() => a.events.some((e) => e.event === 'hello') && b.events.some((e) => e.event === 'hello'));
+    expect((await presence()).online).toBe(2);
+    // 普通断开：宽限期内仍算在线（锁屏、切后台不立即掉线）
+    await b.close();
+    await new Promise((r) => setTimeout(r, 100));
+    expect((await presence()).online).toBe(2);
+    // 强制下线：立即不算在线
+    await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/units/PD/kick`, { cookie: ctx.adminCookie, body: {} });
+    await waitFor(() => a.ended(), 5000);
+    expect((await presence()).online).toBe(1);
+    const units = await call(ctx.app, 'GET', `/api/v1/admin/events/${eventId}/units`, { cookie: ctx.adminCookie });
+    expect(units.body.units.find((u: any) => u.unitCode === 'MH').online).toBe(true);
+    expect(units.body.units.find((u: any) => u.unitCode === 'PD').online).toBe(false);
+  });
+
   it('撤销提交后的事件一律不推给旧连接（同一快照判定）', async () => {
     const { eventId, pd, mh } = await prepared();
     const old = await pdStream(eventId, pd);

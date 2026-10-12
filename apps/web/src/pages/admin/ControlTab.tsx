@@ -4,7 +4,8 @@ import { KdocsReadBar } from '../../components/KdocsRead';
 import { StepPicker } from '../../components/StepPicker';
 import { Modal } from '../../components/ui';
 import { ApiError, api, errorText, newIdempotencyKey } from '../../lib/api';
-import { fmtTime, previewTargetWan, wan2 } from '../../lib/format';
+import { fmtTime, previewTargetWan, wan0 } from '../../lib/format';
+import { playBid, playChampion, unlockAudio } from '../../lib/sound';
 import type { TabProps } from './EventPage';
 
 type Action = 'START' | 'PAUSE' | 'RESUME' | 'OPEN_GROUP' | 'CLOSE_GROUP' | 'LOCK';
@@ -52,6 +53,16 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
     }
   };
   const safe = (f: () => Promise<void>) => () => void f().catch(() => {});
+
+  const sound = state.event.config.screenSound !== false;
+  const setSound = async (on: boolean) => {
+    try {
+      await api.patch(`${base}/config`, { screenSound: on });
+      reload();
+    } catch (e) {
+      setMsg({ ok: false, text: errorText(e) });
+    }
+  };
 
   const screenMode = async (mode: ScreenMode) => {
     try {
@@ -156,6 +167,24 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
             ))}
           </div>
           <p className="small muted">大屏打开「/screen」链接时自动跟随此处切换。</p>
+          <div className="a-row" style={{ marginTop: 8 }}>
+            <span>大屏声音：</span>
+            <button className={`btn btn-sm ${sound ? 'btn-gold' : ''}`} onClick={() => void setSound(true)} disabled={sound}>
+              开
+            </button>
+            <button className={`btn btn-sm ${!sound ? 'btn-gold' : ''}`} onClick={() => void setSound(false)} disabled={!sound}>
+              关
+            </button>
+            <button className="btn btn-sm" onClick={() => (unlockAudio(), setTimeout(playBid, 60))} title="在本电脑上试听">
+              试听加码音
+            </button>
+            <button className="btn btn-sm" onClick={() => (unlockAudio(), setTimeout(playChampion, 60))} title="在本电脑上试听">
+              试听标王音效
+            </button>
+          </div>
+          <p className="small muted" style={{ marginBottom: 0 }}>
+            普通加码响一声「叮」；出现新的标王候选（≥30% 且组内唯一第一）时播放标王音效。投屏电脑需在大屏页面点一下（如「全屏」）后浏览器才允许出声。
+          </p>
         </div>
       </div>
 
@@ -250,7 +279,7 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
                           <td className="r num">
                             <b>{r.currentPp}%</b>
                           </td>
-                          <td className="r num small">{wan2(r.targetWan)}</td>
+                          <td className="r num small">{wan0(r.targetWan)}</td>
                           <td className="r">
                             {p.status !== 'LOCKED' && (
                               <div className="a-row" style={{ justifyContent: 'flex-end', gap: 4 }}>
@@ -572,7 +601,7 @@ function ProxyBidModal(props: {
       </div>
       {row.baseTargetWan && Number.isFinite(to) && (
         <p className="num" style={{ textAlign: 'center' }}>
-          目标 {wan2(previewTargetWan(row.baseTargetWan, to))} 万元
+          目标 {wan0(previewTargetWan(row.baseTargetWan, to))} 万元
         </p>
       )}
       {needHigh && (

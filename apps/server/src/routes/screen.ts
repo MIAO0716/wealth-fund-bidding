@@ -1,4 +1,4 @@
-import { isProjectCode } from '@bidding/shared';
+import { UNITS, isProjectCode } from '@bidding/shared';
 import type { FastifyInstance } from 'fastify';
 import type { AppDeps } from '../app';
 import { withSnapshot } from '../db/pool';
@@ -30,7 +30,13 @@ export function registerScreenRoutes(api: FastifyInstance, deps: AppDeps): void 
     withSnapshot(ctx.db, (tx) => screenResults(tx, req.params.eventId)),
   );
 
-  api.get<{ Params: P }>('/screen/events/:eventId/stream', auth, async (req, reply) => {
+  /** 领导手机在线数（大屏右上角） */
+  api.get<{ Params: P }>('/screen/events/:eventId/presence', auth, async (req) => ({
+    online: hub.onlineUnits(req.params.eventId).length,
+    total: UNITS.length,
+  }));
+
+    api.get<{ Params: P }>('/screen/events/:eventId/stream', auth, async (req, reply) => {
     await openStream(hub, req, reply, { role: 'SCREEN', sessionId: req.session!.id, eventId: req.params.eventId, unitCode: null });
   });
 }

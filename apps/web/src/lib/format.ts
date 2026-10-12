@@ -34,3 +34,12 @@ export function previewTargetWan(baseWan: string, pp: number): string {
   const fp = (t % 1_000_000n).toString().padStart(6, '0');
   return `${ip}.${fp}`;
 }
+
+/** 精确万元字符串 → 整数万元展示（四舍五入，不显示小数；字符串运算避免浮点误差） */
+export function wan0(v: string | null | undefined): string {
+  if (v === null || v === undefined) return '—';
+  const [i, f = ''] = v.split('.');
+  let n = BigInt(i);
+  if (Number((f + '0')[0]) >= 5) n += 1n;
+  return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}

@@ -31,6 +31,7 @@ export const DEFAULT_CONFIG: EventConfig = {
   highValueConfirmPp: DEFAULT_HIGH_VALUE_CONFIRM_PP,
   // 大屏默认展示底标与按增幅实时计算的目标金额
   showAmountsOnScreen: true,
+  screenSound: true,
   wifiSsid: '',
   wifiPassword: '',
 };
@@ -51,6 +52,7 @@ const configPatchSchema = z
     allowedIncrementSteps: z.array(z.number()),
     highValueConfirmPp: z.number().int().min(5).max(100000),
     showAmountsOnScreen: z.boolean(),
+    screenSound: z.boolean(),
     wifiSsid: z.string().max(64),
     wifiPassword: z.string().max(64),
   })
@@ -225,4 +227,62 @@ export async function archiveEvent(ctx: AppContext, eventId: string, actor: Acto
     await audit(tx, eventId, actor, 'EVENT_ARCHIVED');
     return { body: { archived: true } };
   });
+}
+
+/**
+ * 删除活动：连同该活动的全部数据（首轮、快照、流水、审计、二维码、会话、金山文档绑定等）一并删除，不可恢复。
+ * 竞标进行中不能删除；配置了备份目录时，删除前先生成一次检查点。
+ */
+export async function deleteEvent(ctx: AppContext, eventId: string, actor: Actor, input: { confirm?: unknown }) {
+  if (ctx.config.readOnly) throw bizError('READ_ONLY');
+  if (input.confirm !== true) throw bizError('CONFIRM_REQUIRED', '删除活动将同时删除全部数据，不可恢复，请确认');
+  const ev = await getEventRow(ctx.db, eventId);
+  const live = await ctx.db.query(`SELECT 1 FROM projects WHERE event_id = $1 AND status = 'LIVE'`, [eventId]);
+  if (live.rowCount) throw bizError('INVALID_STATE', '竞标进行中的活动不能删除，请先暂停或锁定');
+  await ctx.onCheckpoint?.(eventId, '删除前');
+  const name = readConfig(ev).name;
+  const client = await ctx.db.connect();
+  try {
+    await client.query('BEGIN');
+    const locked = await client.query('SELECT id FROM events WHERE id = $1 FOR UPDATE', [eventId]);
+    if (!locked.rowCount) throw bizError('NOT_FOUND', '活动不存在');
+    const live2 = await client.query(`SELECT 1 FROM projects WHERE event_id = $1 AND status = 'LIVE'`, [eventId]);
+    if (live2.rowCount) throw bizError('INVALID_STATE', '竞标进行中的活动不能删除，请先暂停或锁定');
+    // 只在本事务内允许清理只追加的快照与流水表
+    await client.query(`SELECT set_config('bidding.purge', 'on', true)`);
+    const del = async (sql: string, params: unknown[] = [eventId]) => (await client.query(sql, params)).rowCount ?? 0;
+    const counts = {
+      bids: await del('DELETE FROM bid_records WHERE event_id = $1'),
+      resultRows: await del('DELETE FROM result_snapshot_rows WHERE snapshot_id IN (SELECT id FROM result_snapshots WHERE event_id = $1)'),
+      firstRoundRows: await del('DELETE FROM first_round_snapshot_rows WHERE snapshot_id IN (SELECT id FROM first_round_snapshots WHERE event_id = $1)'),
+    };
+    await del('DELETE FROM result_snapshots WHERE event_id = $1');
+    await del('DELETE FROM first_round_snapshots WHERE event_id = $1');
+    await del('DELETE FROM bid_states WHERE event_id = $1');
+    await del('DELETE FROM first_round_drafts WHERE event_id = $1');
+    await del('DELETE FROM project_groups WHERE event_id = $1');
+    await del('DELETE FROM projects WHERE event_id = $1');
+    await del('DELETE FROM import_batches WHERE event_id = $1');
+    await del('DELETE FROM kdocs_rows WHERE event_id = $1');
+    await del('DELETE FROM kdocs_bindings WHERE event_id = $1');
+    await del('DELETE FROM realtime_events WHERE event_id = $1');
+    await del('DELETE FROM sessions WHERE event_id = $1');
+    await del('DELETE FROM unit_credentials WHERE event_id = $1');
+    await del('DELETE FROM screen_keys WHERE event_id = $1');
+    await del('DELETE FROM failed_submissions WHERE event_id = $1');
+    await del(`DELETE FROM idempotency_records WHERE scope LIKE '%:' || $1 || ':%'`);
+    await del('DELETE FROM audit_logs WHERE event_id = $1');
+    await del('UPDATE events SET parent_event_id = NULL WHERE parent_event_id = $1');
+    await del('DELETE FROM events WHERE id = $1');
+    await client.query(`SELECT set_config('bidding.purge', 'off', true)`);
+    // 删除记录本身保留在全局审计（不属于任何活动）
+    await audit(client, null, actor, 'EVENT_DELETED', { details: { eventId, name, isDemo: ev.is_demo, ...counts } });
+    await client.query('COMMIT');
+    return { deleted: true, eventId, name };
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 }
