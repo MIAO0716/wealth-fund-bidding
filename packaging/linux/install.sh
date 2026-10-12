@@ -291,6 +291,12 @@ ln -sfn "$SITE" /etc/nginx/sites-enabled/$SERVICE.conf
 [ -L /etc/nginx/sites-enabled/default ] && rm -f /etc/nginx/sites-enabled/default
 nginx -t >/dev/null 2>&1 || { nginx -t; die "Nginx 配置检查失败"; }
 systemctl reload nginx
+# reload 是异步的：等 Nginx 真正换上本站配置（/healthz 返回 200 或跳转 HTTPS）再继续，避免刚装完访问到旧配置
+for _ in $(seq 1 50); do
+  code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $DOMAIN" http://127.0.0.1/healthz || true)
+  case "$code" in 200 | 301 | 308) break ;; esac
+  sleep 0.2
+done
 
 if [ "$TLS" = "letsencrypt" ] && [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
   say "申请免费 HTTPS 证书（Let's Encrypt）"
