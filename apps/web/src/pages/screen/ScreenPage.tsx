@@ -14,7 +14,7 @@ import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 're
 import { useSearchParams } from 'react-router-dom';
 import { DemoBadge } from '../../components/ui';
 import { api, errorText, takeHashParam } from '../../lib/api';
-import { fmtTime, wan0 } from '../../lib/format';
+import { fenToYi2, fmtTime, increasePct2, wan0 } from '../../lib/format';
 import { audioReady, playBid, playChampion, unlockAudio } from '../../lib/sound';
 import { CONN_LABEL, type ConnState, useRealtime } from '../../lib/realtime';
 
@@ -54,7 +54,10 @@ interface ResultGroup {
 interface ResultsSnapshot {
   seq: number;
   event: PublicEvent;
-  projects: Record<ProjectCode, { projectCode: ProjectCode; name: string; status: string; locked: boolean; lockedAt?: string; groups: ResultGroup[] }>;
+  projects: Record<
+    ProjectCode,
+    { projectCode: ProjectCode; name: string; status: string; locked: boolean; lockedAt?: string; groups: ResultGroup[]; totals?: { baseFen: string; targetFen: string } }
+  >;
 }
 
 /** 大屏入口：凭证交换 → 按管理端指定模式（follow）或固定模式展示 */
@@ -556,8 +559,23 @@ function ResultsScreen({ eventId }: { eventId: string }) {
         {(['wealth', 'fund'] as ProjectCode[]).map((pc) => {
           const pr = data.projects[pc];
           return (
-            <div className="s-result-project" key={pc}>
+            <div className={`s-result-project ${pr.locked && pr.totals ? 'has-total' : ''}`} key={pc}>
               <div className="s-result-label">{pr.name}</div>
+              {pr.locked && pr.totals && (
+                <div className="s-total">
+                  <span className="s-total-label">全市合计</span>
+                  <span className="s-total-item">
+                    基础底标<b className="num">{fenToYi2(pr.totals.baseFen)}</b>亿元
+                  </span>
+                  <span className="s-total-arrow">→</span>
+                  <span className="s-total-item main">
+                    最终竞标目标<b className="num">{fenToYi2(pr.totals.targetFen)}</b>亿元
+                  </span>
+                  <span className="s-total-item main">
+                    全市增幅<b className="num">{increasePct2(pr.totals.baseFen, pr.totals.targetFen)}%</b>
+                  </span>
+                </div>
+              )}
               {pr.locked ? (
                 pr.groups.map((g) => (
                   <div className="s-result-group" key={g.groupNo}>

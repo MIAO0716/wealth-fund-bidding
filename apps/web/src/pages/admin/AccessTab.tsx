@@ -204,7 +204,7 @@ export function AccessTab({ eventId, state, me }: TabProps) {
       {issued && (
         <Modal
           wide
-          title={issued.creds.length === 1 ? `领导使用卡：${issued.creds[0].unitName}（可直接让领导扫屏幕上的二维码）` : `领导使用卡（${issued.creds.length} 家，每张 A4 打印两张）`}
+          title={issued.creds.length === 1 ? `领导使用卡：${issued.creds[0].unitName}（可直接让领导扫屏幕上的二维码）` : `领导使用卡（${issued.creds.length} 家，每页 A4 一个单位）`}
           onClose={() => setIssued(null)}
           footer={
             <>

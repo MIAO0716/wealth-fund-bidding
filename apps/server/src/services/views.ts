@@ -284,11 +284,15 @@ export async function resultBoards(tx: Tx, eventId: string, withAmounts: boolean
           ...(withAmounts ? { baseTargetWan: fenToWanExact(BigInt(r.base_target_fen)), targetWan: fenToWanExact(BigInt(r.target_fen)) } : {}),
         })),
     }));
+    // 全市合计：16 家基础底标与竞标目标之和；全市增幅 =（目标合计 ÷ 底标合计 − 1）
+    const baseSum = rows.reduce((a, r) => a + BigInt(r.base_target_fen), 0n);
+    const targetSum = rows.reduce((a, r) => a + BigInt(r.target_fen), 0n);
     out[p] = {
       projectCode: p,
       name: PROJECT_NAMES[p],
       status: 'LOCKED',
       locked: true,
+      ...(withAmounts ? { totals: { baseFen: baseSum.toString(), targetFen: targetSum.toString() } } : {}),
       lockedAt: toIso(snap.locked_at),
       snapshotId: snap.id,
       tieWarnings: snap.tie_warnings,
@@ -472,4 +476,31 @@ export async function adminFirstRound(tx: Tx, eventId: string) {
     };
   }
   return { seq: ev.seq, draftVersion: ev.draftVersion, projects: out };
+}
+
+/** 每家单位的会前首轮数据（领导使用卡上半部分）：已冻结用快照，未冻结用草稿 */
+export async function unitFirstRoundCards(tx: Tx, eventId: string) {
+  const projects = await loadProjects(tx, eventId);
+  const out = new Map<string, Record<string, { baseTargetWan: string | null; firstRoundPp: number | null; targetWan: string | null; frozen: boolean }>>();
+  for (const u of UNITS) out.set(u.code, {});
+  for (const p of PROJECT_CODES) {
+    const frozen = projects[p].status !== 'DRAFT';
+    const rows = frozen
+      ? (await tx.query(
+          `SELECT r.unit_code, r.base_target_fen, r.first_round_pp FROM first_round_snapshot_rows r
+             JOIN first_round_snapshots s ON s.id = r.snapshot_id WHERE s.event_id = $1 AND s.project_code = $2`,
+          [eventId, p],
+        )).rows
+      : (await tx.query('SELECT unit_code, base_target_fen, first_round_pp FROM first_round_drafts WHERE event_id = $1 AND project_code = $2', [eventId, p])).rows;
+    for (const r of rows) {
+      const base = r.base_target_fen ? BigInt(r.base_target_fen) : null;
+      out.get(r.unit_code)![p] = {
+        baseTargetWan: base !== null ? fenToWanExact(base) : null,
+        firstRoundPp: r.first_round_pp ?? null,
+        targetWan: base !== null && r.first_round_pp !== null ? fenToWanExact(targetFen(base, r.first_round_pp)) : null,
+        frozen,
+      };
+    }
+  }
+  return out;
 }

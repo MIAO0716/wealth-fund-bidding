@@ -1416,14 +1416,14 @@ textarea {
   .print-only {
     display: block;
   }
-  .print-only .leader-card {
+  .print-only .leader-card:not(.leader-page) {
     height: 132mm;
     margin-bottom: 8mm;
     border: 1.5px solid #c8102e;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
-  .print-only .leader-card:nth-child(2n) {
+  .print-only .leader-card:not(.leader-page):nth-child(2n) {
     break-after: page;
     page-break-after: always;
   }
@@ -2191,4 +2191,297 @@ textarea {
   padding: 2px 6px;
   margin-left: 6px !important;
   letter-spacing: 0;
+}
+
+/* 结果大屏：每个项目下方的全市合计 */
+.s-result-project.has-total {
+  grid-template-rows: minmax(0, 1fr) auto;
+  row-gap: 12px;
+}
+.s-result-project.has-total .s-result-label {
+  grid-row: 1 / span 2;
+}
+.s-total {
+  grid-row: 2;
+  grid-column: 2 / span 3;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 34px;
+  padding: 12px 28px;
+  border-radius: 16px;
+  background: linear-gradient(90deg, rgba(226, 184, 92, 0.08), rgba(226, 184, 92, 0.2), rgba(226, 184, 92, 0.08));
+  border: 1.5px solid rgba(226, 184, 92, 0.65);
+  color: var(--gold-soft);
+  font-size: 20px;
+  letter-spacing: 2px;
+  white-space: nowrap;
+  animation: projectIn 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.s-total-label {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 6px;
+  color: var(--gold);
+  padding-right: 30px;
+  border-right: 1px solid rgba(226, 184, 92, 0.45);
+}
+.s-total-item b {
+  margin: 0 8px;
+  font-size: 30px;
+  font-weight: 800;
+  color: var(--ivory);
+  letter-spacing: 0;
+}
+.s-total-item.main b {
+  font-size: 40px;
+  color: var(--gold);
+}
+.s-total-arrow {
+  color: rgba(246, 227, 180, 0.6);
+  font-size: 26px;
+}
+
+/* ================================================================== 领导使用卡：每页一个单位（A4 纵向） */
+.leader-page {
+  display: flex;
+  flex-direction: column;
+  aspect-ratio: 210 / 297;
+  font-size: 13px;
+  color: var(--ink);
+}
+.lp-head {
+  background: linear-gradient(135deg, #d4142f, var(--red) 50%, #9e0c22);
+  color: #fff;
+  text-align: center;
+  padding: 16px 18px 14px;
+}
+.lp-event {
+  font-size: 13px;
+  opacity: 0.92;
+  letter-spacing: 1px;
+}
+.lp-unit {
+  font-size: 40px;
+  font-weight: 900;
+  letter-spacing: 12px;
+  margin: 4px 0 2px;
+  text-indent: 12px;
+}
+.lp-group {
+  font-size: 12px;
+  color: var(--gold-soft);
+}
+.lp-top {
+  padding: 14px 18px 10px;
+}
+.lp-section-title {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--red);
+  letter-spacing: 2px;
+  margin-bottom: 10px;
+}
+.lp-section-title small {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  letter-spacing: 0;
+  margin-left: 6px;
+}
+.lp-tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.lp-tile {
+  border: 1.5px solid #f0c8cf;
+  border-radius: 12px;
+  padding: 10px 14px 12px;
+  background: linear-gradient(180deg, #fff7f3, #fff);
+}
+.lp-tile-name {
+  font-size: 18px;
+  font-weight: 900;
+  color: var(--red);
+  letter-spacing: 6px;
+  border-bottom: 1px dashed #f0c8cf;
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+}
+.lp-kv {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 0;
+}
+.lp-kv span {
+  color: var(--muted);
+  width: 60px;
+  flex: none;
+}
+.lp-kv b {
+  font-size: 20px;
+  font-weight: 800;
+}
+.lp-kv.big b {
+  font-size: 30px;
+  color: var(--red);
+}
+.lp-kv em {
+  font-style: normal;
+  color: var(--muted);
+  font-size: 12px;
+}
+.lp-cut {
+  margin: 6px 18px;
+  border-top: 1.5px dashed #d9b3b9;
+}
+.lp-bottom {
+  flex: 1;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 16px;
+  align-items: start;
+  padding: 10px 18px 16px;
+}
+.lp-qr-box {
+  text-align: center;
+}
+.lp-qr-box .lc-qr-main {
+  width: 190px;
+  height: 190px;
+  border: 2px solid var(--red);
+  border-radius: 10px;
+  padding: 4px;
+}
+.lp-qr-cap {
+  margin-top: 4px;
+  font-weight: 800;
+  color: var(--red);
+  letter-spacing: 2px;
+}
+.lp-steps ol {
+  margin: 0;
+  padding-left: 18px;
+  line-height: 1.65;
+}
+.lp-steps li {
+  margin-bottom: 6px;
+  color: #444;
+}
+.lp-steps li b {
+  color: var(--ink);
+}
+.lp-wifi {
+  display: block;
+  width: 80px;
+  height: 80px;
+  margin-top: 4px;
+}
+.lp-note {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+@media print {
+  .print-only .leader-page {
+    width: 190mm;
+    height: 277mm;
+    aspect-ratio: auto;
+    border: 1.5px solid #c8102e;
+    border-radius: 6mm;
+    break-after: page;
+    page-break-after: always;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    font-size: 14pt;
+  }
+  .print-only .leader-page:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+  .print-only .lp-head {
+    padding: 9mm 10mm 7mm;
+  }
+  .print-only .lp-event {
+    font-size: 13pt;
+  }
+  .print-only .lp-unit {
+    font-size: 40pt;
+    letter-spacing: 16pt;
+    text-indent: 16pt;
+    margin: 2mm 0;
+  }
+  .print-only .lp-group {
+    font-size: 12pt;
+  }
+  .print-only .lp-top {
+    padding: 7mm 10mm 3mm;
+  }
+  .print-only .lp-section-title {
+    font-size: 15pt;
+    margin-bottom: 4mm;
+  }
+  .print-only .lp-section-title small {
+    font-size: 10pt;
+  }
+  .print-only .lp-tiles {
+    gap: 6mm;
+  }
+  .print-only .lp-tile {
+    padding: 4mm 6mm 5mm;
+  }
+  .print-only .lp-tile-name {
+    font-size: 20pt;
+  }
+  .print-only .lp-kv {
+    padding: 1.5mm 0;
+  }
+  .print-only .lp-kv span {
+    width: 24mm;
+    font-size: 12pt;
+  }
+  .print-only .lp-kv b {
+    font-size: 18pt;
+  }
+  .print-only .lp-kv.big b {
+    font-size: 30pt;
+  }
+  .print-only .lp-kv em {
+    font-size: 11pt;
+  }
+  .print-only .lp-cut {
+    margin: 3mm 10mm;
+  }
+  .print-only .lp-bottom {
+    padding: 5mm 10mm 8mm;
+    gap: 8mm;
+  }
+  .print-only .lp-qr-box .lc-qr-main {
+    width: 66mm;
+    height: 66mm;
+  }
+  .print-only .lp-qr-cap {
+    font-size: 13pt;
+  }
+  .print-only .lp-steps ol {
+    font-size: 12pt;
+    line-height: 1.5;
+  }
+  .print-only .lp-steps li {
+    margin-bottom: 1.5mm;
+  }
+  .print-only .lp-wifi {
+    width: 22mm;
+    height: 22mm;
+  }
+  .print-only .lp-note {
+    font-size: 10pt;
+  }
+}
+
+/* 屏幕预览：A4 竖版卡片 */
+.card-grid:has(.leader-page) {
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
 }

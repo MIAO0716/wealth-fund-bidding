@@ -44,7 +44,7 @@ import {
   publishFirstRoundAll,
 } from '../services/projects';
 import { templateCsv, templateXlsx } from '../services/templates';
-import { adminFirstRound, adminState } from '../services/views';
+import { adminFirstRound, adminState, unitFirstRoundCards } from '../services/views';
 import { openStream } from './sse';
 
 type P = { eventId: string; projectCode: string; unitCode: string; key: string; keyId: string };
@@ -260,18 +260,24 @@ export function registerAdminRoutes(api: FastifyInstance, deps: AppDeps): void {
     return { eventName: cfg.name, wifi: await wifiInfo(cfg) };
   };
 
-  api.post<{ Params: P }>('/admin/events/:eventId/units/:unitCode/credentials', auth, async (req) => ({
-    ...(await issueUnitCredential(ctx, req.params.eventId, actor(req), parseUnit(req.params.unitCode), {
+  /** 领导使用卡上半部分：该单位会前首轮数据 */
+  const firstRoundOf = (eventId: string) => withSnapshot(ctx.db, (tx) => unitFirstRoundCards(tx, eventId));
+
+  api.post<{ Params: P }>('/admin/events/:eventId/units/:unitCode/credentials', auth, async (req) => {
+    const unitCode = parseUnit(req.params.unitCode);
+    const cred = await issueUnitCredential(ctx, req.params.eventId, actor(req), unitCode, {
       renew: body<{ renew?: boolean }>(req).renew === true,
       revokeSessions: body<{ revokeSessions?: boolean }>(req).revokeSessions === true,
-    })),
-    card: await cardInfo(req.params.eventId),
-  }));
+    });
+    const fr = await firstRoundOf(req.params.eventId);
+    return { ...cred, firstRound: fr.get(unitCode), card: await cardInfo(req.params.eventId) };
+  });
 
   /** 显示 16 家领导使用卡（用于打印）：已有二维码的沿用同一个，没有的才生成；活动期间二维码不变 */
   api.post<{ Params: P }>('/admin/events/:eventId/credentials/batch', auth, async (req) => {
     const out = [];
-    for (const u of UNITS) out.push(await issueUnitCredential(ctx, req.params.eventId, actor(req), u.code));
+    const fr = await firstRoundOf(req.params.eventId);
+    for (const u of UNITS) out.push({ ...(await issueUnitCredential(ctx, req.params.eventId, actor(req), u.code)), firstRound: fr.get(u.code) });
     return { credentials: out, card: await cardInfo(req.params.eventId) };
   });
 

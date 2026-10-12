@@ -74,9 +74,18 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await admin.goto(`/admin/events/${eventId}/access`);
   await admin.getByRole('button', { name: '16 家领导使用卡（生成 / 打印）' }).click();
   await expect(admin.locator('.modal .leader-card')).toHaveCount(16);
-  await expect(admin.locator('.modal .leader-card').first()).toContainText('用手机自带「相机」扫右侧二维码进入（推荐）');
+  // 每页一个单位：上半部分为会前首轮数据，下半部分为二维码与使用说明
+  const pdCard = admin.locator('.modal .leader-card').first();
+  await expect(pdCard).toContainText('浦东');
+  await expect(pdCard).toContainText('会前首轮数据');
+  await expect(pdCard.locator('.lp-tile', { hasText: '理财' })).toContainText('100.00');
+  await expect(pdCard.locator('.lp-tile', { hasText: '理财' })).toContainText('30%');
+  await expect(pdCard.locator('.lp-tile', { hasText: '基金' })).toContainText('250.50');
+  await expect(pdCard).toContainText('用手机自带「相机」扫左侧二维码');
   await expect(admin.locator('.modal .leader-card').first()).toContainText('Meeting-5G');
   await admin.locator('.modal .leader-card').first().screenshot({ path: `${SHOTS}/leader-card.png` });
+  // 打印版式（A4 每页一个单位）
+  await admin.pdf({ path: `${SHOTS}/leader-card-print.pdf`, format: 'A4', printBackground: true });
   // 二维码活动期间固定不变：再次打开是同一个二维码
   const firstCard = await admin.locator('.modal .leader-card').first().innerHTML();
   await admin.getByRole('button', { name: '关闭', exact: true }).click();
@@ -254,6 +263,11 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await expect(screen.locator('.s-result-row.top', { hasText: '浦东' }).locator('.added')).toHaveText('+5');
   await expect(screen.locator('.s-result-row.top', { hasText: '浦东' })).toContainText('35%');
   await screen.waitForTimeout(1000); // 等入场动画结束再截图
+  // 每个项目下方显示全市合计：底标 16×100 万 = 0.16 亿 → 目标 1,790 万 = 0.18 亿，增幅 11.88%
+  const total = screen.locator('.s-result-project').first().locator('.s-total');
+  await expect(total).toContainText('0.16');
+  await expect(total).toContainText('0.18');
+  await expect(total).toContainText('11.88%');
   await shot(screen, 'screen-results');
 
   // ---------------------------------------------------------- 基金：首轮已在会前冻结，理财锁定后手机自动转到基金
