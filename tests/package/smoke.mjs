@@ -81,8 +81,16 @@ if (mode === 'setup') {
   assert(xlsx.status === 200 && xlsx.data.byteLength > 5000, 'Excel 导出');
   st = (await req('GET', `${E}/state`, undefined, admin)).data;
   const pause = await req('POST', `${E}/projects/wealth/control`, { action: 'PAUSE', expectedControlVersion: st.projects.wealth.controlVersion, idempotencyKey: `smoke-pause-${ev.id}` }, admin);
-  const lock = await req('POST', `${E}/projects/wealth/control`, { action: 'LOCK', confirm: true, expectedControlVersion: pause.data.controlVersion, idempotencyKey: `smoke-lock-${ev.id}` }, admin);
-  assert(lock.status === 200, '锁定理财');
+  // 只结束了第一组：正常锁定被拒绝，提前收场须单独确认并填写原因
+  const normal = await req('POST', `${E}/projects/wealth/control`, { action: 'LOCK', confirm: true, expectedControlVersion: pause.data.controlVersion, idempotencyKey: `smoke-lock0-${ev.id}` }, admin);
+  assert(normal.status === 422 && normal.data?.error?.code === 'GROUPS_NOT_FINISHED', '有分组未结束时正常锁定被拒绝');
+  const lock = await req(
+    'POST',
+    `${E}/projects/wealth/control`,
+    { action: 'LOCK', confirm: true, earlyLock: true, reason: '部署验证：提前收场', expectedControlVersion: pause.data.controlVersion, idempotencyKey: `smoke-lock-${ev.id}` },
+    admin,
+  );
+  assert(lock.status === 200, '提前收场并锁定理财');
   // 自动检查点（pg_dump）
   let checkpoints = 0;
   for (let i = 0; i < 40 && checkpoints < 2; i++) {
