@@ -59,6 +59,8 @@ if [ -f "$ENV_FILE" ]; then
   [ -n "$PORT" ] || PORT="$(envval PORT)"
   if [ "$TLS" = "letsencrypt" ] && [ -f "$CONF_DIR/tls-mode" ]; then TLS="$(cat "$CONF_DIR/tls-mode")"; fi
 fi
+PORT_GIVEN=0
+[ -n "$PORT" ] && PORT_GIVEN=1
 PORT="${PORT:-8080}"
 
 if [ -z "$DOMAIN" ]; then
@@ -75,6 +77,46 @@ VERSION="$(cat "$PKG_DIR/VERSION")"
 say "理财、基金现场竞标系统 · $( [ $UPGRADE -eq 1 ] && echo 升级 || echo 安装 )"
 echo "    版本：$VERSION"
 echo "    域名：$DOMAIN（证书：$TLS）"
+
+# ---------------------------------------------------------------- 安装前检查
+# 服务器上可能已有在用的网站或数据库：发现冲突就停止，不做任何改动
+listener() { ss -ltnpH "sport = :$1" 2>/dev/null | head -1; }
+listener_exe() {
+  local pid
+  pid="$(listener "$1" | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2 || true)"
+  [ -n "$pid" ] && readlink "/proc/$pid/exe" 2>/dev/null || true
+}
+listener_name() {
+  local n
+  n="$(listener "$1" | grep -o 'users:(("[^"]*' | head -1 | sed 's/users:(("//' || true)"
+  printf '%s' "${n:-未知程序}"
+}
+if [ "$UPGRADE" -eq 0 ]; then
+  say "安装前检查（不会改动现有服务）"
+  command -v ss >/dev/null 2>&1 || { apt-get update -qq >/dev/null && apt-get install -y -qq iproute2 >/dev/null; }
+  for p in 80 443; do
+    [ -n "$(listener "$p")" ] || continue
+    exe="$(listener_exe "$p")"
+    case "$exe" in
+      /usr/sbin/nginx) ;; # 系统软件源的 Nginx：本系统只新增一个站点，与现有站点并存
+      *) die "端口 $p 已被「$(listener_name "$p")${exe:+（$exe）}」占用（常见于宝塔、1Panel、Caddy 或 Docker 中的网站程序）。为避免影响现有网站，安装已停止，没有做任何改动。请把这段提示发给技术支持，改为由现有网站程序转发到本系统。" ;;
+    esac
+  done
+  if [ -n "$(listener 5432)" ]; then
+    case "$(listener_exe 5432)" in
+      /usr/lib/postgresql/*/bin/postgres) ;; # 系统软件源的 PostgreSQL：本系统只新增独立的用户和数据库
+      *) die "端口 5432 已被「$(listener_name 5432)」占用（可能是 Docker 中的数据库）。为避免冲突，安装已停止，没有做任何改动。请把这段提示发给技术支持。" ;;
+    esac
+  fi
+  if [ -n "$(listener "$PORT")" ]; then
+    [ "$PORT_GIVEN" -eq 0 ] || die "端口 $PORT 已被占用，请换一个 --port"
+    for alt in 18080 28080 38080; do
+      if [ -z "$(listener "$alt")" ]; then warn "端口 $PORT 已被其他程序使用，本系统改用 $alt（只在本机内部使用）"; PORT=$alt; break; fi
+    done
+    [ -z "$(listener "$PORT")" ] || die "端口 $PORT、18080、28080、38080 都已被占用，请用 --port 指定一个空闲端口"
+  fi
+  ok "未发现冲突"
+fi
 
 # ---------------------------------------------------------------- 系统依赖
 say "安装系统依赖（PostgreSQL、Nginx$( [ "$TLS" = letsencrypt ] && echo '、Certbot' )）"
@@ -287,8 +329,16 @@ server {
 EOF
 fi
 ln -sfn "$SITE" /etc/nginx/sites-enabled/$SERVICE.conf
-# 系统自带的默认站点会抢占 80 端口的默认响应，移除其启用链接（原文件保留）
-[ -L /etc/nginx/sites-enabled/default ] && rm -f /etc/nginx/sites-enabled/default
+# 系统自带的默认站点会抢占 80 端口的默认响应：只有它仍是安装时的原样（未被用于其他网站）才移除启用链接（原文件保留）
+DEF_SITE=/etc/nginx/sites-available/default
+if [ -L /etc/nginx/sites-enabled/default ]; then
+  stock_md5="$(dpkg-query -W -f='${Conffiles}\n' nginx-common nginx 2>/dev/null | awk -v f="$DEF_SITE" '$1 == f { print $2; exit }')"
+  if [ -n "$stock_md5" ] && [ "$(md5sum < "$DEF_SITE" | cut -d' ' -f1)" = "$stock_md5" ]; then
+    rm -f /etc/nginx/sites-enabled/default
+  else
+    warn "保留了服务器上已在使用的默认站点（/etc/nginx/sites-enabled/default）；本系统只响应 $DOMAIN 的访问"
+  fi
+fi
 nginx -t >/dev/null 2>&1 || { nginx -t; die "Nginx 配置检查失败"; }
 systemctl reload nginx
 # reload 是异步的：等 Nginx 真正换上本站配置（/healthz 返回 200 或跳转 HTTPS）再继续，避免刚装完访问到旧配置
