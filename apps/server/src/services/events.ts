@@ -25,11 +25,12 @@ export const DEFAULT_CONFIG: EventConfig = {
   amountBasis: '',
   statPeriod: '',
   dataSource: '',
-  // 二维码一次性使用、扫码后绑定手机；默认 30 天有效，便于会前提前打印
+  // 二维码有效期内可重复扫码（同一时间一部手机在线）；默认 30 天有效，便于会前提前打印
   qrValidHours: 720,
   allowedIncrementSteps: [...DEFAULT_ALLOWED_INCREMENT_STEPS],
   highValueConfirmPp: DEFAULT_HIGH_VALUE_CONFIRM_PP,
-  showAmountsOnScreen: false,
+  // 大屏默认展示底标与按增幅实时计算的目标金额
+  showAmountsOnScreen: true,
   wifiSsid: '',
   wifiPassword: '',
 };
@@ -62,6 +63,8 @@ export function parseConfigPatch(input: unknown): Partial<EventConfig> {
     throw bizError('BAD_REQUEST', r.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('；'));
   }
   const patch = r.data as Partial<EventConfig>;
+  // 年度随活动日期自动确定
+  if (patch.eventDate) patch.year = Number(patch.eventDate.slice(0, 4));
   if (patch.allowedIncrementSteps !== undefined) {
     const steps = normalizeAllowedSteps(patch.allowedIncrementSteps);
     if (!steps) throw bizError('BAD_REQUEST', '快捷档位须为正整数，例如 [1,5,10]');
@@ -97,15 +100,11 @@ export async function getEventRow(q: Queryable, eventId: string) {
   return r.rows[0];
 }
 
-/** 正式开启前必须具备的配置；返回缺失项说明（空数组表示齐全） */
+/** 正式开启前必须具备的配置（只需活动名称与日期）；返回缺失项说明（空数组表示齐全） */
 export function configProblems(config: EventConfig): string[] {
   const p: string[] = [];
   if (!config.name) p.push('未填写活动名称');
   if (!config.eventDate) p.push('未填写活动日期');
-  if (!config.metricName) p.push('未填写业务指标名称');
-  if (!config.amountBasis) p.push('未填写金额统计口径（如销量或AUM净增）');
-  if (!config.statPeriod) p.push('未填写统计周期');
-  if (!config.dataSource) p.push('未填写数据来源说明');
   if (!normalizeAllowedSteps(config.allowedIncrementSteps)) p.push('快捷档位配置不合法');
   return p;
 }
@@ -129,7 +128,6 @@ export async function createEvent(ctx: AppContext, actor: Actor, input: CreateEv
     if (input.parentEventId) {
       const parent = await client.query('SELECT id FROM events WHERE id = $1', [input.parentEventId]);
       if (!parent.rowCount) throw bizError('NOT_FOUND', '关联的原活动不存在');
-      if (!input.parentReason?.trim()) throw bizError('REASON_REQUIRED', '重新创建活动须填写原因');
     }
     await client.query(
       `INSERT INTO events (id, is_demo, config, parent_event_id, parent_reason, created_by)

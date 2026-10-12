@@ -17,10 +17,6 @@ const CONFIG = {
   name: '2026年理财、基金现场竞标（E2E）',
   year: 2026,
   eventDate: '2099-12-31',
-  metricName: '测试指标',
-  amountBasis: '销量',
-  statPeriod: '活动期',
-  dataSource: 'E2E 测试数据，非正式数据',
 };
 
 const UNITS: Array<[string, number]> = [
@@ -92,14 +88,14 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   const screenCtx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   const screen = await screenCtx.newPage();
   await screen.goto(key.screenUrl.replace(/^https?:\/\/[^/]+/, baseURL!));
-  await expect(screen.getByText('首轮结果待现场发布')).toBeVisible();
+  await expect(screen.locator('.s-center-msg')).toContainText('首轮结果待发布');
   expect(screen.url()).not.toContain('#k=');
 
   // ---------------------------------------------------------- 手机：浦东、闵行、黄浦
   const pd = await phone(browser, (await issue('PD')).replace(/^https?:\/\/[^/]+/, baseURL!));
   const mh = await phone(browser, (await issue('MH')).replace(/^https?:\/\/[^/]+/, baseURL!));
   const hp = await phone(browser, (await issue('HP')).replace(/^https?:\/\/[^/]+/, baseURL!));
-  await expect(pd.page.getByText('首轮结果待现场发布')).toBeVisible();
+  await expect(pd.page.getByText('首轮结果待发布')).toBeVisible();
   await expect(pd.page.locator('.m-unit')).toContainText('浦东');
   // 首次进入显示三步说明，可关闭
   await expect(pd.page.getByText('使用说明（三步）')).toBeVisible();
@@ -107,13 +103,14 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await pd.page.getByRole('button', { name: '知道了' }).click();
   await expect(pd.page.getByText('使用说明（三步）')).toHaveCount(0);
 
-  // ---------------------------------------------------------- 管理端发布理财首轮（界面操作）
+  // ---------------------------------------------------------- 会前准备：理财、基金首轮一起冻结（界面操作）
   await admin.goto(`/admin/events/${eventId}/first-round`);
-  await expect(admin.getByText('完整性 16/16')).toBeVisible();
-  await admin.getByRole('button', { name: '发布首轮并冻结' }).click();
-  await admin.getByLabel('我已核对 16 家底标与首轮数据，确认发布').check();
-  await admin.getByRole('button', { name: '确认发布' }).click();
-  await expect(admin.getByText(/首轮已发布并冻结/)).toBeVisible();
+  await expect(admin.getByText('理财：已录入 16/16')).toBeVisible();
+  await expect(admin.getByText('基金：已录入 16/16')).toBeVisible();
+  await admin.getByRole('button', { name: '一起冻结理财、基金首轮' }).click();
+  await admin.getByRole('button', { name: '确认冻结' }).click();
+  await expect(admin.getByText(/已冻结：理财（LC-R1-.*）、基金（JJ-R1-.*）/)).toBeVisible();
+  await expect(admin.getByText('理财、基金首轮均已冻结')).toBeVisible();
 
   // 大屏自动切到首轮：三组 16 家
   await expect(screen.getByText('会前首轮结果', { exact: false })).toBeVisible();
@@ -138,9 +135,10 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await expect(admin.locator('.board-group.open').first()).toBeVisible();
   await expect(admin.getByText('第1组竞标中')).toBeVisible();
 
-  // 大屏自动切到实时榜
-  await expect(screen.locator('.s-group.open')).toHaveCount(1);
-  await expect(screen.locator('.s-row')).toHaveCount(16);
+  // 大屏自动切到实时榜：只展示进行中的第一组（6 家），带目标金额
+  await expect(screen.locator('.s-panel.open')).toHaveCount(1);
+  await expect(screen.locator('.s-prow')).toHaveCount(6);
+  await expect(screen.locator('.s-step.on')).toContainText('第一组');
 
   // 黄浦（第二组）未轮到：按钮禁用并说明原因
   await expect(hp.page.getByText('尚未轮到本组，请等待')).toBeVisible();
@@ -155,7 +153,7 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await expect(modal.locator('.m-confirm-row')).toContainText('30%');
   await expect(modal.locator('.m-confirm-row')).toContainText('35%');
   await expect(modal).toContainText('135.00 万元');
-  await expect(modal).toContainText('确认后不可下调');
+  await expect(modal).toContainText('确认后不可自行下调');
   await shot(pd.page, 'phone-confirm');
   const t0 = Date.now();
   await modal.getByRole('button', { name: '确认提交' }).click();
@@ -163,12 +161,14 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await expect(pd.page.locator('.m-current')).toContainText('35');
 
   // 大屏 PD 行更新为 35%
-  const pdRow = screen.locator('.s-row', { hasText: '浦东' });
+  const pdRow = screen.locator('.s-prow', { hasText: '浦东' });
   await expect(pdRow.locator('.s-current')).toContainText('35');
+  // 目标金额随增幅实时计算：100 万 × 1.35
+  await expect(pdRow.locator('.s-target')).toHaveText('135.00');
   const latency = Date.now() - t0;
   console.log(`浦东点击确认 → 大屏显示 35% 用时 ${latency} ms`);
   expect(latency).toBeLessThan(3000);
-  await expect(screen.locator('.s-feed-item').first()).toContainText('浦东 理财 30% → 35%');
+  await expect(screen.locator('.s-feed-item').first()).toContainText('浦东 30% → 35%');
   await expect(screen.getByText('标王候选：浦东')).toBeVisible();
   await shot(pd.page, 'phone-bid');
 
@@ -181,14 +181,25 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await mh.page.locator('.m-main-btn').click();
   await mh.page.locator('.modal').getByRole('button', { name: '确认提交' }).click();
   await expect(mh.page.getByRole('heading', { name: '追加成功 · 服务器已确认' })).toBeVisible();
-  await expect(screen.locator('.s-row', { hasText: '闵行' }).locator('.s-current')).toContainText('22');
+  await expect(screen.locator('.s-prow', { hasText: '闵行' }).locator('.s-current')).toContainText('22');
   await shot(screen, 'screen-live');
   await shot(admin, 'admin-control');
+
+  // 闵行误操作：工作人员「代录 → 下调更正」改回 15%，只需弹窗确认，不填原因
+  await admin.locator('.board-group.open tr', { hasText: '闵行' }).getByRole('button', { name: '代录' }).click();
+  await admin.getByRole('button', { name: '下调更正（误操作）' }).click();
+  await admin.getByLabel('更正后的增幅').fill('15');
+  await expect(admin.locator('.modal')).toContainText('115.00 万元');
+  await admin.getByRole('button', { name: '确认下调为 15%' }).click();
+  await expect(admin.getByText(/已更正 闵行 22% → 15%/)).toBeVisible();
+  await expect(screen.locator('.s-prow', { hasText: '闵行' }).locator('.s-current')).toContainText('15');
+  await expect(mh.page.locator('.m-current')).toContainText('15');
+  await expect(mh.page.getByText('（工作人员更正）')).toBeVisible();
 
   // 无横向溢出、16 家完整可见
   const phoneOverflow = await pd.page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(phoneOverflow).toBeLessThanOrEqual(0);
-  const outside = await screen.locator('.s-row').evaluateAll((els) =>
+  const outside = await screen.locator('.s-prow').evaluateAll((els) =>
     els.filter((e) => {
       const r = e.getBoundingClientRect();
       return r.bottom > window.innerHeight || r.right > window.innerWidth || r.top < 0;
@@ -199,9 +210,18 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   // ---------------------------------------------------------- 结束三组 → 自动暂停 → 锁定理财
   await admin.getByRole('button', { name: '结束本组' }).click();
   await expect(pd.page.getByText('本组竞标已结束')).toBeVisible();
+  // 本组结束：大屏停留在第一组最终结果，直到下一组开始
+  await expect(screen.locator('.s-panel-state')).toHaveText('本组竞标结束 · 最终结果');
+  await expect(screen.locator('.s-prow.top')).toContainText('浦东');
+  await expect(screen.getByText('本组标王：浦东')).toBeVisible();
+  await shot(screen, 'screen-group-final');
   for (let g = 0; g < 2; g++) {
     await admin.getByRole('button', { name: '开放本组' }).first().click();
     await expect(admin.getByRole('button', { name: '结束本组' })).toBeVisible();
+    // 下一组开始：大屏平滑切换到该组
+    await expect(screen.locator('.s-step.on')).toContainText(g === 0 ? '第二组' : '第三组');
+    await expect(screen.locator('.s-panel')).toHaveCount(1);
+    await expect(screen.locator('.s-prow')).toHaveCount(5);
     await admin.getByRole('button', { name: '结束本组' }).click();
     await expect(admin.getByRole('button', { name: '结束本组' })).toHaveCount(0);
   }
@@ -210,7 +230,8 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await admin.getByLabel('已与现场核对三组结果，确认锁定').check();
   await admin.getByRole('button', { name: '确认锁定' }).click();
   await expect(admin.locator('.chip', { hasText: '已锁定' })).toBeVisible();
-  await expect(pd.page.locator('.m-tag', { hasText: '已结束' })).toBeVisible();
+  // 理财锁定后手机自动转到基金专场
+  await expect(pd.page.locator('.m-tag.gold')).toHaveText('基金专场');
 
   // 结果大屏
   await admin.getByRole('button', { name: '最终结果' }).click();
@@ -218,23 +239,23 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await expect(screen.locator('.s-result-row.top', { hasText: '浦东' })).toContainText('35%');
   await shot(screen, 'screen-results');
 
-  // ---------------------------------------------------------- 基金：理财锁定后可发布
-  await admin.goto(`/admin/events/${eventId}/first-round`);
-  await admin.getByRole('button', { name: '基金首轮' }).click();
-  await admin.getByRole('button', { name: '发布首轮并冻结' }).click();
-  await admin.getByLabel('我已核对 16 家底标与首轮数据，确认发布').check();
-  await admin.getByRole('button', { name: '确认发布' }).click();
-  await expect(admin.getByText(/基金首轮已发布并冻结/)).toBeVisible();
-  await expect(screen.getByText('基金 · 会前首轮结果')).toBeVisible();
-  // 手机自动切到基金专场，可认领基金底标
+  // ---------------------------------------------------------- 基金：首轮已在会前冻结，理财锁定后手机自动转到基金
   await expect(pd.page.locator('.m-tag.gold')).toHaveText('基金专场');
   await expect(pd.page.getByRole('button', { name: '确认认领基础底标' })).toBeVisible();
+  await admin.goto(`/admin/events/${eventId}/control`);
+  await admin.getByRole('button', { name: '基金', exact: true }).click();
+  await admin.getByRole('button', { name: '首轮结果' }).click();
+  await expect(screen.getByText('基金 · 会前首轮结果')).toBeVisible();
+  await admin.getByRole('button', { name: '开放本组' }).first().click();
+  await expect(admin.getByText('第1组竞标中')).toBeVisible();
+  await expect(screen.locator('.s-panel.open .s-prow')).toHaveCount(6);
+  await admin.goto(`/admin/events/${eventId}/first-round`);
   await shot(admin, 'admin-first-round');
 
   for (const ctx of [adminCtx, screenCtx, pd.ctx, mh.ctx, hp.ctx]) await ctx.close();
 });
 
-test('同一二维码在第二部手机上扫码：提示单位与处理办法', async ({ browser }) => {
+test('换手机：同一二维码在第二部手机上扫码直接登录，第一部手机自动下线', async ({ browser }) => {
   const adminCtx = await browser.newContext();
   const req = adminCtx.request;
   expect((await req.post('/api/v1/auth/admin/login', { headers: H, data: { username: 'admin', password: 'e2e-password-123' } })).ok()).toBe(true);
@@ -247,12 +268,20 @@ test('同一二维码在第二部手机上扫码：提示单位与处理办法',
   // 同一手机再次扫码：直接进入
   await p1.goto(url);
   await p1.waitForURL('**/bid');
-  // 另一部手机扫同一个码：说明是哪家单位、怎么处理
+  await expect(p1.locator('.m-unit')).toContainText('闵行');
+  // 另一部手机扫同一个码：直接登录；第一部手机无需刷新即提示已下线
   const second = await browser.newContext(PHONE);
   const p2 = await second.newPage();
   await p2.goto(url);
-  await expect(p2.getByText('闵行的二维码已在一部手机上使用过')).toBeVisible();
-  await expect(p2.getByText('换手机')).toBeVisible();
+  await p2.waitForURL('**/bid');
+  await expect(p2.locator('.m-unit')).toContainText('闵行');
+  await expect(p1.getByText(/本机未登录或已下线/)).toBeVisible({ timeout: 8_000 });
+  // 工作人员「强制下线」：第二部手机下线，二维码仍可再扫
+  expect((await req.post(`/api/v1/admin/events/${ev.event.id}/units/MH/kick`, { headers: H, data: {} })).ok()).toBe(true);
+  await expect(p2.getByText(/本机未登录或已下线/)).toBeVisible({ timeout: 8_000 });
+  await p2.goto(url);
+  await p2.waitForURL('**/bid');
+  await expect(p2.locator('.m-unit')).toContainText('闵行');
   await Promise.all([adminCtx.close(), first.close(), second.close()]);
 });
 
@@ -262,7 +291,7 @@ test('会话失效与非法入口有明确提示', async ({ browser }) => {
   await page.goto('/join#t=invalid-token-aaaaaaaaaaaaaaaaaaaa');
   await expect(page.getByText('无法进入')).toBeVisible();
   await page.goto('/bid');
-  await expect(page.getByText('会话失效，请联系工作人员重新扫码')).toBeVisible();
+  await expect(page.getByText(/本机未登录或已下线/)).toBeVisible();
   const s = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   const sp = await s.newPage();
   await sp.goto('/screen/live');

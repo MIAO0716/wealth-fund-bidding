@@ -42,6 +42,9 @@ export function FirstRoundTab({ eventId, state }: TabProps) {
   if (!data) return <p className="muted">加载中…</p>;
   const pd = data.projects[project];
   const isDraft = pd.project.status === 'DRAFT';
+  const both = (['wealth', 'fund'] as ProjectCode[]).map((c) => data.projects[c]);
+  const anyDraft = both.some((x) => x.project.status === 'DRAFT');
+  const allComplete = both.every((x) => x.project.status !== 'DRAFT' || x.preview.completeCount === x.preview.totalCount);
 
   const upload = async (file: File) => {
     setBusy(true);
@@ -99,6 +102,30 @@ export function FirstRoundTab({ eventId, state }: TabProps) {
 
       <div className="a-card">
         <h3>
+          会前准备：理财、基金首轮一起冻结
+          {anyDraft ? (
+            <button className="btn btn-primary" onClick={() => setPublishOpen(true)} disabled={!allComplete || busy}>
+              一起冻结理财、基金首轮
+            </button>
+          ) : (
+            <span className="chip green">理财、基金首轮均已冻结</span>
+          )}
+        </h3>
+        <div className="a-row">
+          {both.map((x) => (
+            <span key={x.project.projectCode} className={`chip ${x.project.status !== 'DRAFT' ? 'green' : x.preview.completeCount === x.preview.totalCount ? 'gold' : 'grey'}`}>
+              {x.project.projectCode === 'wealth' ? '理财' : '基金'}：
+              {x.project.status !== 'DRAFT' ? `已冻结 ${fmtTime(x.project.publishedAt, true)}` : `已录入 ${x.preview.completeCount}/${x.preview.totalCount}`}
+            </span>
+          ))}
+        </div>
+        <p className="small muted" style={{ marginBottom: 0 }}>
+          会前完成：上传一份含理财、基金的文件（共 32 行），核对无误后点「一起冻结」。冻结后底标与首轮增幅不可修改，领导即可扫码认领底标；竞标现场不需要再操作本页。
+        </p>
+      </div>
+
+      <div className="a-card">
+        <h3>
           导入首轮数据
           <span className="a-row">
             <a className="btn btn-sm" href="/api/v1/admin/first-round/template.xlsx">
@@ -112,7 +139,7 @@ export function FirstRoundTab({ eventId, state }: TabProps) {
         <div className="a-row">
           <input ref={fileRef} type="file" accept=".xlsx,.csv" onChange={(e) => e.target.files?.[0] && void upload(e.target.files[0])} disabled={busy} />
           <span className="small muted">
-            支持 .xlsx / .csv；可只含理财 16 行、基金 16 行或全部 32 行；底标与增幅都留空的行会被跳过。增幅填整数百分点（30% 填 30）。任一行错误整批不写入。
+            支持 .xlsx / .csv；建议一次上传理财、基金全部 32 行（也可分两次）；底标与增幅都留空的行会被跳过。增幅填整数百分点（30% 填 30）。任一行错误整批不写入。
           </span>
         </div>
       </div>
@@ -121,9 +148,7 @@ export function FirstRoundTab({ eventId, state }: TabProps) {
         <h3>
           {project === 'wealth' ? '理财' : '基金'}草稿与快照
           {isDraft ? (
-            <button className="btn btn-primary" onClick={() => setPublishOpen(true)} disabled={pd.preview.completeCount < 16}>
-              发布首轮并冻结
-            </button>
+            <span className="chip">草稿 {pd.preview.completeCount}/{pd.preview.totalCount}</span>
           ) : (
             pd.snapshot && <span className="chip green">快照 {pd.snapshot.batchNo} · 已冻结</span>
           )}
@@ -170,7 +195,7 @@ export function FirstRoundTab({ eventId, state }: TabProps) {
       </div>
 
       <div className="a-card">
-        <h3>首轮榜单预览（{isDraft ? '仅管理员可见，大屏未发布前显示「待现场发布」' : '已发布快照'}）</h3>
+        <h3>首轮榜单预览（{isDraft ? '仅管理员可见，冻结前大屏显示「待发布」' : '已发布快照'}）</h3>
         <div className="board3">
           {pd.preview.groups.map((g) => (
             <div className="board-group" key={g.groupNo}>
@@ -248,9 +273,8 @@ export function FirstRoundTab({ eventId, state }: TabProps) {
       {publishOpen && (
         <PublishModal
           base={base}
-          project={project}
-          view={pd.project}
-          completeCount={pd.preview.completeCount}
+          draftVersion={data.draftVersion}
+          counts={both.map((x) => ({ name: x.project.projectCode === 'wealth' ? '理财' : '基金', complete: x.preview.completeCount, frozen: x.project.status !== 'DRAFT' }))}
           onClose={() => setPublishOpen(false)}
           onDone={(t) => {
             setPublishOpen(false);
@@ -393,21 +417,25 @@ function EditModal(props: { row: DraftRow; project: ProjectCode; draftVersion: n
   );
 }
 
-function PublishModal(props: { base: string; project: ProjectCode; view: ProjectView; completeCount: number; onClose: () => void; onDone: (t: string) => void }) {
-  const [checked, setChecked] = useState(false);
+function PublishModal(props: {
+  base: string;
+  draftVersion: number;
+  counts: Array<{ name: string; complete: number; frozen: boolean }>;
+  onClose: () => void;
+  onDone: (t: string) => void;
+}) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const name = props.project === 'wealth' ? '理财' : '基金';
   const go = async () => {
     setBusy(true);
     setErr(null);
     try {
-      const r = await api.post(`${props.base}/projects/${props.project}/publish-first-round`, {
-        expectedDraftVersion: props.view.draftVersion,
+      const r = await api.post<{ published: Array<{ projectCode: ProjectCode; batchNo: string }> }>(`${props.base}/first-round/publish`, {
+        expectedDraftVersion: props.draftVersion,
         idempotencyKey: newIdempotencyKey('pub'),
         confirm: true,
       });
-      props.onDone(`${name}首轮已发布并冻结（${r.batchNo}），大屏已切换到首轮展示`);
+      props.onDone(`已冻结：${r.published.map((x) => `${x.projectCode === 'wealth' ? '理财' : '基金'}（${x.batchNo}）`).join('、')}。领导现在可以扫码认领底标`);
     } catch (e) {
       const details = (e as { details?: { problems?: string[] } }).details;
       setErr(errorText(e) + (details?.problems ? `：${details.problems.slice(0, 8).join('；')}` : ''));
@@ -417,32 +445,31 @@ function PublishModal(props: { base: string; project: ProjectCode; view: Project
   };
   return (
     <Modal
-      title={`发布${name}首轮（重大操作）`}
+      title="冻结理财、基金首轮"
       onClose={props.onClose}
       footer={
         <>
           <button className="btn" onClick={props.onClose}>
             取消
           </button>
-          <button className="btn btn-primary" onClick={() => void go()} disabled={!checked || busy}>
-            确认发布
+          <button className="btn btn-primary" onClick={() => void go()} disabled={busy}>
+            确认冻结
           </button>
         </>
       }
     >
-      <ul style={{ paddingLeft: 18, lineHeight: 1.8 }}>
-        <li>冻结 16 家底标与首轮增幅，之后不可覆盖或删改；</li>
-        <li>当前增幅从首轮起算，领导可开始确认认领底标；</li>
-        <li>大屏切换到{name}首轮展示，完整首轮榜单将公开；</li>
-        {props.project === 'fund' && <li>基金须在理财锁定后才能发布。</li>}
-      </ul>
       <p>
-        完整性：<b>{props.completeCount}/16</b>
+        {props.counts.map((c) => (
+          <span key={c.name} className="chip" style={{ marginRight: 6 }}>
+            {c.name} {c.frozen ? '已冻结' : `${c.complete}/16`}
+          </span>
+        ))}
       </p>
-      <label className="a-row">
-        <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
-        我已核对 16 家底标与首轮数据，确认发布
-      </label>
+      <ul style={{ paddingLeft: 18, lineHeight: 1.8 }}>
+        <li>冻结后 16 家的底标与首轮增幅不可修改；</li>
+        <li>领导扫码即可确认认领底标（理财、基金各一次）；</li>
+        <li>现场仍按「先理财、后基金」进行，基金在理财锁定后开始。</li>
+      </ul>
       {err && (
         <div className="notice" style={{ marginTop: 10 }}>
           {err}

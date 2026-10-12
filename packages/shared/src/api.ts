@@ -65,6 +65,9 @@ export interface ProjectView {
   groups: GroupView[];
 }
 
+/** 流水来源：领导、工作人员代录、金山文档、工作人员更正（下调） */
+export type BidSource = 'LEADER' | 'ADMIN_PROXY' | 'KDOCS' | 'ADMIN_CORRECTION';
+
 /** 实时榜的一行 */
 export interface LiveRow {
   unitCode: string;
@@ -101,7 +104,7 @@ export interface BidFeedItem {
   projectCode: ProjectCode;
   fromPp: number;
   toPp: number;
-  source: 'LEADER' | 'ADMIN_PROXY' | 'KDOCS';
+  source: BidSource;
   acceptedAt: string;
   eventSequence: number;
 }
@@ -120,7 +123,7 @@ export interface BidReceipt {
   bidVersion: number;
   eventSequence: number;
   acceptedAt: string;
-  source: 'LEADER' | 'ADMIN_PROXY' | 'KDOCS';
+  source: BidSource;
 }
 
 export interface FirstRoundRow {
@@ -154,6 +157,7 @@ export interface FirstRoundBoard {
 
 export type RealtimeType =
   | 'BID_ACCEPTED'
+  | 'BID_CORRECTED'
   | 'BASE_ACKNOWLEDGED'
   | 'PROJECT_STATUS'
   | 'GROUP_STATUS'

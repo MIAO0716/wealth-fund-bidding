@@ -59,13 +59,13 @@ describe('只读维护模式', () => {
 });
 
 describe('关联新活动', () => {
-  it('发布后发现数据错误：新建关联原活动的新活动，须填写原因；原活动保留', async () => {
+  it('发布后发现数据错误：新建关联原活动的新活动（原因选填）；原活动保留', async () => {
     const eventId = await createFormalEvent(ctx);
     const noReason = await call(ctx.app, 'POST', '/api/v1/admin/events', {
       cookie: ctx.adminCookie,
       body: { config: { name: '重建' }, parentEventId: eventId },
     });
-    expect(noReason.body.error.code).toBe('REASON_REQUIRED');
+    expect(noReason.status).toBe(201);
     const ok = await call(ctx.app, 'POST', '/api/v1/admin/events', {
       cookie: ctx.adminCookie,
       body: { config: { name: '重建' }, parentEventId: eventId, parentReason: '浦东底标录错，经组织者确认重建' },

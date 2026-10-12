@@ -8,13 +8,14 @@ import {
   actorOf,
   createScreenKey,
   issueUnitCredential,
+  kickUnitSessions,
   listScreenKeys,
   revokeScreenKey,
   revokeUnitSessions,
   unitAccessStatus,
   wifiInfo,
 } from '../services/auth';
-import { lookupRequest, submitBid } from '../services/bids';
+import { correctBid, lookupRequest, submitBid } from '../services/bids';
 import { audit, idemScope } from '../services/core';
 import { createDemoEvent, seedDemo } from '../services/demo';
 import {
@@ -39,6 +40,7 @@ import {
   parseProject,
   parseUnit,
   publishFirstRound,
+  publishFirstRoundAll,
 } from '../services/projects';
 import { templateCsv, templateXlsx } from '../services/templates';
 import { adminFirstRound, adminState } from '../services/views';
@@ -53,7 +55,7 @@ function attachment(fallback: string, name: string): string {
 
 /** 这些操作前先读取一次金山表格 */
 const KDOCS_FLUSH_BEFORE = new Set(['START', 'OPEN_GROUP', 'RESUME', 'CLOSE_GROUP', 'PAUSE', 'LOCK']);
-/** 这些操作要求全部单位读取成功（否则拦截，可填写原因强制执行） */
+/** 这些操作要求全部单位读取成功（否则拦截，核对后可确认强制执行） */
 const KDOCS_MUST_READ = new Set(['CLOSE_GROUP', 'LOCK']);
 
 export function registerAdminRoutes(api: FastifyInstance, deps: AppDeps): void {
@@ -163,6 +165,13 @@ export function registerAdminRoutes(api: FastifyInstance, deps: AppDeps): void {
     return { ...r.body, replayed: r.replayed };
   });
 
+  /** 会前准备：理财、基金首轮一起冻结 */
+  api.post<{ Params: P }>('/admin/events/:eventId/first-round/publish', auth, async (req) => {
+    const r = await publishFirstRoundAll(ctx, req.params.eventId, actor(req), body(req));
+    deps.kdocs.sync.wake(req.params.eventId);
+    return { ...r.body, replayed: r.replayed };
+  });
+
   api.post<{ Params: P }>('/admin/events/:eventId/projects/:projectCode/publish-first-round', auth, async (req) => {
     const r = await publishFirstRound(ctx, req.params.eventId, actor(req), req.params.projectCode, body(req));
     deps.kdocs.sync.wake(req.params.eventId);
@@ -181,12 +190,11 @@ export function registerAdminRoutes(api: FastifyInstance, deps: AppDeps): void {
     if (KDOCS_FLUSH_BEFORE.has(action)) {
       const f = await deps.kdocs.sync.flush(req.params.eventId);
       if (f && KDOCS_MUST_READ.has(action)) {
-        // 结束本组、锁定：有单位没读到时默认拦截；确需继续，须填写原因强制执行（记入审计）
+        // 结束本组、锁定：有单位没读到时默认拦截；核对后确认继续（记入审计）
         if (b.kdocsForce !== true) {
-          throw bizError('KDOCS_INCOMPLETE', `${f.message}。请排除问题后再点一次；确需继续，请填写原因后强制执行`, { units: f.units });
+          throw bizError('KDOCS_INCOMPLETE', `${f.message}。请排除问题后再点一次；确需继续，请核对后确认强制执行`, { units: f.units });
         }
-        const reason = typeof b.kdocsForceReason === 'string' ? b.kdocsForceReason.trim() : '';
-        if (!reason) throw bizError('REASON_REQUIRED', '强制执行须填写原因');
+        const reason = typeof b.kdocsForceReason === 'string' && b.kdocsForceReason.trim() ? b.kdocsForceReason.trim() : '工作人员核对后确认继续';
         forced = { ...f, reason };
       }
       if (f) kdocsWarning = f.message;
@@ -215,9 +223,15 @@ export function registerAdminRoutes(api: FastifyInstance, deps: AppDeps): void {
     return { ...r.body, replayed: r.replayed };
   });
 
-  /** 管理员代录：与领导端同一事务和校验，必须填写原因 */
+  /** 管理员代录：与领导端同一事务和校验 */
   api.post<{ Params: P }>('/admin/events/:eventId/projects/:projectCode/units/:unitCode/bids', auth, async (req, reply) => {
     const r = await submitBid(ctx, req.params.eventId, actor(req), req.params.projectCode, parseUnit(req.params.unitCode), body(req));
+    return reply.status(r.statusCode).send({ receipt: r.body, replayed: r.replayed });
+  });
+
+  /** 管理员更正：领导误操作时把增幅下调（锁定前，不低于首轮增幅） */
+  api.post<{ Params: P }>('/admin/events/:eventId/projects/:projectCode/units/:unitCode/correct', auth, async (req, reply) => {
+    const r = await correctBid(ctx, req.params.eventId, actor(req), req.params.projectCode, parseUnit(req.params.unitCode), body(req));
     return reply.status(r.statusCode).send({ receipt: r.body, replayed: r.replayed });
   });
 
@@ -242,7 +256,7 @@ export function registerAdminRoutes(api: FastifyInstance, deps: AppDeps): void {
     card: await cardInfo(req.params.eventId),
   }));
 
-  /** 一次为 16 家生成二维码（用于打印）；会作废此前未使用的二维码 */
+  /** 一次为 16 家生成二维码（用于打印）；会作废此前的二维码（已登录的手机不受影响） */
   api.post<{ Params: P }>('/admin/events/:eventId/credentials/batch', auth, async (req) => {
     const out = [];
     for (const u of UNITS) out.push(await issueUnitCredential(ctx, req.params.eventId, actor(req), u.code));
@@ -251,6 +265,11 @@ export function registerAdminRoutes(api: FastifyInstance, deps: AppDeps): void {
 
   api.post<{ Params: P }>('/admin/events/:eventId/units/:unitCode/revoke', auth, async (req) =>
     (await revokeUnitSessions(ctx, req.params.eventId, actor(req), parseUnit(req.params.unitCode), String(body(req).reason ?? ''))).body,
+  );
+
+  /** 强制下线：让该单位当前登录的手机下线，二维码继续有效（领导可用新手机重新扫码） */
+  api.post<{ Params: P }>('/admin/events/:eventId/units/:unitCode/kick', auth, async (req) =>
+    (await kickUnitSessions(ctx, req.params.eventId, actor(req), parseUnit(req.params.unitCode))).body,
   );
 
   api.get<{ Params: P }>('/admin/events/:eventId/screen-keys', auth, async (req) => ({ keys: await listScreenKeys(ctx.db, req.params.eventId) }));

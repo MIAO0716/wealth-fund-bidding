@@ -9,6 +9,7 @@ import {
   PROJECT_NAMES,
   type ProjectCode,
   type ProjectStatus,
+  PROJECT_CODES,
   UNITS,
   UNIT_BY_CODE,
   canTransition,
@@ -116,7 +117,7 @@ async function bumpControl(tx: Tx, eventId: string, projectCode: ProjectCode, se
   return r.rows[0];
 }
 
-/** 先理财后基金：基金的发布/开始要求理财已锁定 */
+/** 先理财后基金：基金开始竞标要求理财已锁定 */
 async function assertProjectOrder(tx: Tx, eventId: string, projectCode: ProjectCode): Promise<void> {
   if (projectCode !== 'fund') return;
   const w = await tx.query<{ status: string }>(
@@ -126,8 +127,78 @@ async function assertProjectOrder(tx: Tx, eventId: string, projectCode: ProjectC
   if (w.rows[0]?.status !== 'LOCKED') throw bizError('PROJECT_ORDER');
 }
 
-// ---------------------------------------------------------------- 首轮发布
+// ---------------------------------------------------------------- 首轮发布（会前准备：理财、基金一起冻结）
 
+/** 在事务内冻结一个项目的首轮：写不可变快照、初始化当前竞标状态 */
+async function freezeOne(tx: Tx, ev: EventRow, actor: Actor, projectCode: ProjectCode, expectedDraftVersion: unknown) {
+  const eventId = ev.id;
+  const project = await lockProject(tx, eventId, projectCode);
+  if (project.status !== 'DRAFT') throw bizError('INVALID_STATE', `${PROJECT_NAMES[projectCode]}首轮已发布`);
+  if (expectedDraftVersion !== undefined && expectedDraftVersion !== project.draft_version) {
+    throw bizError('DRAFT_VERSION_CONFLICT', '草稿已被修改，请刷新核对后再发布', { currentDraftVersion: project.draft_version });
+  }
+  const problems = await firstRoundProblems(tx, eventId, projectCode);
+  if (problems.length) {
+    throw bizError('ROUND1_INCOMPLETE', `${PROJECT_NAMES[projectCode]}首轮数据不完整或无效（${problems.length} 项）`, {
+      problems: problems.map((x) => `${PROJECT_NAMES[projectCode]}：${x}`),
+    });
+  }
+  const snapshotId = uuid();
+  const now = new Date();
+  const batchNo = `${projectCode === 'wealth' ? 'LC' : 'JJ'}-R1-${shanghaiDateCompact(now)}`;
+  await tx.query(
+    `INSERT INTO first_round_snapshots (id, event_id, project_code, batch_no, draft_version, published_at, published_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [snapshotId, eventId, projectCode, batchNo, project.draft_version, now, actor.id],
+  );
+  await tx.query(
+    `INSERT INTO first_round_snapshot_rows (snapshot_id, unit_code, base_target_fen, first_round_pp, remark)
+     SELECT $1, unit_code, base_target_fen, first_round_pp, remark
+       FROM first_round_drafts WHERE event_id = $2 AND project_code = $3`,
+    [snapshotId, eventId, projectCode],
+  );
+  // 当前增幅从首轮快照起算
+  await tx.query(
+    `INSERT INTO bid_states (event_id, project_code, unit_code, base_target_fen, first_round_pp, current_pp)
+     SELECT $1, $2, unit_code, base_target_fen, first_round_pp, first_round_pp
+       FROM first_round_snapshot_rows WHERE snapshot_id = $3`,
+    [eventId, projectCode, snapshotId],
+  );
+  await bumpControl(tx, eventId, projectCode, `status = 'ROUND1_PUBLISHED', published_at = $3, first_round_snapshot_id = $4`, [now, snapshotId]);
+  const seq = await emit(tx, eventId, {
+    type: 'FIRST_ROUND_PUBLISHED',
+    audience: 'PUBLIC',
+    projectCode,
+    data: { snapshotId, batchNo, publishedAt: now.toISOString() },
+  });
+  await audit(tx, eventId, actor, 'FIRST_ROUND_PUBLISHED', {
+    projectCode,
+    details: { snapshotId, batchNo, draftVersion: project.draft_version },
+    eventSequence: seq,
+  });
+  return { snapshotId, batchNo, publishedAt: now.toISOString(), projectCode, status: 'ROUND1_PUBLISHED' as const };
+}
+
+/** 冻结后当前专场与大屏：理财未锁定时为理财，否则为基金 */
+async function pointScreenAfterFreeze(tx: Tx, eventId: string): Promise<void> {
+  const w = await tx.query<{ status: string }>(`SELECT status FROM projects WHERE event_id = $1 AND project_code = 'wealth'`, [eventId]);
+  const current: ProjectCode = w.rows[0]?.status === 'LOCKED' ? 'fund' : 'wealth';
+  const ev = await tx.query<{ current_project: string; screen_mode: string; screen_project: string }>(
+    'SELECT current_project, screen_mode, screen_project FROM events WHERE id = $1',
+    [eventId],
+  );
+  const e = ev.rows[0];
+  if (e.current_project === current && e.screen_mode === 'FIRST_ROUND' && e.screen_project === current) return;
+  await tx.query(`UPDATE events SET current_project = $2, screen_mode = 'FIRST_ROUND', screen_project = $2 WHERE id = $1`, [eventId, current]);
+  await emit(tx, eventId, { type: 'SCREEN_MODE', audience: 'PUBLIC', projectCode: current, data: { mode: 'FIRST_ROUND', projectCode: current } });
+}
+
+function checkFreezeAllowed(ev: EventRow): void {
+  const cfgProblems = ev.is_demo ? [] : configProblems(readConfig(ev));
+  if (cfgProblems.length) throw bizError('CONFIG_INCOMPLETE', `活动配置不完整：${cfgProblems.join('、')}`, { problems: cfgProblems });
+}
+
+/** 单个项目发布首轮（保留接口；基金不再要求理财先锁定） */
 export async function publishFirstRound(
   ctx: AppContext,
   eventId: string,
@@ -137,6 +208,7 @@ export async function publishFirstRound(
 ) {
   const projectCode = parseProject(projectCodeRaw);
   if (input.confirm !== true) throw bizError('CONFIRM_REQUIRED', '首轮发布后底标与首轮值将冻结，不可修改，请二次确认');
+  if (typeof input.expectedDraftVersion !== 'number') throw bizError('BAD_REQUEST', 'expectedDraftVersion 须为整数');
   const result = await runWrite(
     ctx,
     eventId,
@@ -147,60 +219,55 @@ export async function publishFirstRound(
       request: { projectCode, expectedDraftVersion: input.expectedDraftVersion },
     },
     async (tx, ev) => {
-      const project = await lockProject(tx, eventId, projectCode);
-      if (project.status !== 'DRAFT') throw bizError('INVALID_STATE', `${PROJECT_NAMES[projectCode]}首轮已发布`);
-      if (input.expectedDraftVersion !== project.draft_version) {
-        throw bizError('DRAFT_VERSION_CONFLICT', '草稿已被修改，请刷新核对后再发布', { currentDraftVersion: project.draft_version });
-      }
-      await assertProjectOrder(tx, eventId, projectCode);
-      const cfgProblems = ev.is_demo ? [] : configProblems(readConfig(ev));
-      if (cfgProblems.length) throw bizError('CONFIG_INCOMPLETE', `活动配置不完整：${cfgProblems.join('、')}`, { problems: cfgProblems });
-      const problems = await firstRoundProblems(tx, eventId, projectCode);
-      if (problems.length) {
-        throw bizError('ROUND1_INCOMPLETE', `首轮数据不完整或无效（${problems.length} 项）`, { problems });
-      }
-      const snapshotId = uuid();
-      const now = new Date();
-      const batchNo = `${projectCode === 'wealth' ? 'LC' : 'JJ'}-R1-${shanghaiDateCompact(now)}`;
-      await tx.query(
-        `INSERT INTO first_round_snapshots (id, event_id, project_code, batch_no, draft_version, published_at, published_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [snapshotId, eventId, projectCode, batchNo, project.draft_version, now, actor.id],
-      );
-      await tx.query(
-        `INSERT INTO first_round_snapshot_rows (snapshot_id, unit_code, base_target_fen, first_round_pp, remark)
-         SELECT $1, unit_code, base_target_fen, first_round_pp, remark
-           FROM first_round_drafts WHERE event_id = $2 AND project_code = $3`,
-        [snapshotId, eventId, projectCode],
-      );
-      // 当前增幅从首轮快照起算
-      await tx.query(
-        `INSERT INTO bid_states (event_id, project_code, unit_code, base_target_fen, first_round_pp, current_pp)
-         SELECT $1, $2, unit_code, base_target_fen, first_round_pp, first_round_pp
-           FROM first_round_snapshot_rows WHERE snapshot_id = $3`,
-        [eventId, projectCode, snapshotId],
-      );
-      await bumpControl(tx, eventId, projectCode, `status = 'ROUND1_PUBLISHED', published_at = $3, first_round_snapshot_id = $4`, [now, snapshotId]);
-      await tx.query(
-        `UPDATE events SET current_project = $2, screen_mode = 'FIRST_ROUND', screen_project = $2 WHERE id = $1`,
-        [eventId, projectCode],
-      );
-      const seq = await emit(tx, eventId, {
-        type: 'FIRST_ROUND_PUBLISHED',
-        audience: 'PUBLIC',
-        projectCode,
-        data: { snapshotId, batchNo, publishedAt: now.toISOString() },
-      });
-      await emit(tx, eventId, { type: 'SCREEN_MODE', audience: 'PUBLIC', projectCode, data: { mode: 'FIRST_ROUND', projectCode } });
-      await audit(tx, eventId, actor, 'FIRST_ROUND_PUBLISHED', {
-        projectCode,
-        details: { snapshotId, batchNo, draftVersion: project.draft_version },
-        eventSequence: seq,
-      });
-      return { body: { snapshotId, batchNo, publishedAt: now.toISOString(), projectCode, status: 'ROUND1_PUBLISHED' } };
+      checkFreezeAllowed(ev);
+      const body = await freezeOne(tx, ev, actor, projectCode, input.expectedDraftVersion);
+      await pointScreenAfterFreeze(tx, eventId);
+      return { body };
     },
   );
   if (!result.replayed) ctx.onCheckpoint?.(eventId, `${projectCode}-首轮发布`);
+  return result;
+}
+
+/** 会前准备：理财、基金首轮一起冻结（任一项目不完整则都不冻结） */
+export async function publishFirstRoundAll(
+  ctx: AppContext,
+  eventId: string,
+  actor: Actor,
+  input: { expectedDraftVersion?: unknown; idempotencyKey?: unknown; confirm?: unknown },
+) {
+  if (input.confirm !== true) throw bizError('CONFIRM_REQUIRED', '冻结后理财、基金的底标与首轮值都不可修改，请二次确认');
+  if (typeof input.expectedDraftVersion !== 'number') throw bizError('BAD_REQUEST', 'expectedDraftVersion 须为整数');
+  const result = await runWrite(
+    ctx,
+    eventId,
+    actor,
+    {
+      operation: 'PUBLISH_FIRST_ROUND_ALL',
+      idempotencyKey: input.idempotencyKey,
+      request: { expectedDraftVersion: input.expectedDraftVersion },
+    },
+    async (tx, ev) => {
+      if (ev.draft_version !== input.expectedDraftVersion) {
+        throw bizError('DRAFT_VERSION_CONFLICT', '首轮草稿已被修改，请刷新核对后再冻结', { currentDraftVersion: ev.draft_version });
+      }
+      checkFreezeAllowed(ev);
+      const statuses = await tx.query<{ project_code: ProjectCode; status: string }>('SELECT project_code, status FROM projects WHERE event_id = $1', [eventId]);
+      const drafts = statuses.rows.filter((r) => r.status === 'DRAFT').map((r) => r.project_code);
+      if (!drafts.length) throw bizError('INVALID_STATE', '理财、基金首轮均已冻结');
+      // 先整体检查两项，避免只冻结了一半
+      const problems: string[] = [];
+      for (const p of PROJECT_CODES.filter((c) => drafts.includes(c))) {
+        problems.push(...(await firstRoundProblems(tx, eventId, p)).map((x) => `${PROJECT_NAMES[p]}：${x}`));
+      }
+      if (problems.length) throw bizError('ROUND1_INCOMPLETE', `首轮数据不完整或无效（${problems.length} 项）`, { problems });
+      const published = [];
+      for (const p of PROJECT_CODES.filter((c) => drafts.includes(c))) published.push(await freezeOne(tx, ev, actor, p, undefined));
+      await pointScreenAfterFreeze(tx, eventId);
+      return { body: { published } };
+    },
+  );
+  if (!result.replayed) ctx.onCheckpoint?.(eventId, '首轮冻结');
   return result;
 }
 
@@ -213,7 +280,7 @@ export interface ControlInput {
   groupNo?: unknown;
   reason?: unknown;
   confirm?: unknown;
-  /** 提前收场：有分组未结束时锁定，须同时填写原因 */
+  /** 提前收场：有分组未结束时锁定，须单独勾选确认 */
   earlyLock?: unknown;
   expectedControlVersion?: unknown;
   idempotencyKey?: unknown;
@@ -273,12 +340,12 @@ async function start(tx: Tx, ev: EventRow, actor: Actor, project: ProjectRow, gr
     throw bizError('INVALID_STATE', `当前状态「${project.status}」不能开始竞标`);
   }
   await assertProjectOrder(tx, eventId, project.project_code);
-  if (ev.current_project !== project.project_code) throw bizError('INVALID_STATE', '该项目不是当前专场');
   const problems = ev.is_demo ? [] : configProblems(readConfig(ev));
   if (problems.length) throw bizError('CONFIG_INCOMPLETE', `活动配置不完整：${problems.join('、')}`, { problems });
   const now = new Date();
   let updated = await bumpControl(tx, eventId, project.project_code, `status = 'LIVE', started_at = $3`, [now]);
-  await tx.query(`UPDATE events SET screen_mode = 'LIVE', screen_project = $2 WHERE id = $1`, [eventId, project.project_code]);
+  // 开始即成为当前专场（基金在理财锁定后开始）
+  await tx.query(`UPDATE events SET current_project = $2, screen_mode = 'LIVE', screen_project = $2 WHERE id = $1`, [eventId, project.project_code]);
   const seq = await emit(tx, eventId, {
     type: 'PROJECT_STATUS',
     audience: 'PUBLIC',
@@ -325,7 +392,6 @@ async function openGroup(tx: Tx, eventId: string, actor: Actor, project: Project
   if (open) throw bizError('INVALID_STATE', `第${open.group_no}组仍在进行，请先结束该组`);
   const target = groups.find((g) => g.group_no === groupNo)!;
   const reopen = target.status === 'CLOSED';
-  if (reopen && !reason) throw bizError('REASON_REQUIRED', '重新开放已结束的组须填写理由');
   await tx.query(
     `UPDATE project_groups SET status = 'OPEN', opened_at = now() WHERE event_id = $1 AND project_code = $2 AND group_no = $3`,
     [eventId, project.project_code, groupNo],
@@ -440,14 +506,13 @@ export function unfinishedGroups(groups: GroupRow[]) {
 async function lock(tx: Tx, eventId: string, actor: Actor, project: ProjectRow, groupRows: GroupRow[], opts: { early: boolean; reason: string }) {
   if (project.status === 'LOCKED') throw bizError('PROJECT_LOCKED', '项目已锁定');
   if (project.status !== 'PAUSED') throw bizError('INVALID_STATE', '锁定前请先暂停竞标，核对后再锁定');
-  // 正常锁定要求各组都已结束；提前收场须单独确认并填写原因，单独记入审计
+  // 正常锁定要求各组都已结束；提前收场须单独确认（勾选「提前收场」），单独记入审计
   const unfinished = unfinishedGroups(groupRows);
   if (unfinished.length) {
     const names = unfinished.map((g) => `${g.name}（${g.statusText}）`).join('、');
     if (!opts.early) {
-      throw bizError('GROUPS_NOT_FINISHED', `${names}尚未结束。正常锁定要求各组都已结束；确需提前收场，请勾选「提前收场」并填写原因`, { groups: unfinished });
+      throw bizError('GROUPS_NOT_FINISHED', `${names}尚未结束。正常锁定要求各组都已结束；确需提前收场，请勾选「提前收场」确认`, { groups: unfinished });
     }
-    if (!opts.reason) throw bizError('REASON_REQUIRED', `提前收场须填写原因（未结束：${names}）`);
   }
   const states = await tx.query<StateRow>(
     'SELECT unit_code, base_target_fen, first_round_pp, current_pp, version FROM bid_states WHERE event_id = $1 AND project_code = $2',
@@ -464,7 +529,7 @@ async function lock(tx: Tx, eventId: string, actor: Actor, project: ProjectRow, 
   if (unfinished.length) {
     await audit(tx, eventId, actor, 'PROJECT_LOCKED_EARLY', {
       projectCode: project.project_code,
-      reason: opts.reason,
+      reason: opts.reason || '工作人员确认提前收场',
       details: { unfinishedGroups: unfinished },
     });
   }
@@ -501,6 +566,14 @@ async function lock(tx: Tx, eventId: string, actor: Actor, project: ProjectRow, 
     }
   }
   await tx.query('UPDATE projects SET result_snapshot_id = $3 WHERE event_id = $1 AND project_code = $2', [eventId, project.project_code, snapshotId]);
+  // 理财锁定后，基金（已冻结首轮）成为当前专场：领导手机与金山表格转到基金；大屏仍停在理财，由工作人员切换
+  if (project.project_code === 'wealth') {
+    await tx.query(
+      `UPDATE events SET current_project = 'fund' WHERE id = $1
+          AND EXISTS (SELECT 1 FROM projects WHERE event_id = $1 AND project_code = 'fund' AND status = 'ROUND1_PUBLISHED')`,
+      [eventId],
+    );
+  }
   await audit(tx, eventId, actor, 'PROJECT_LOCKED', {
     projectCode: project.project_code,
     details: { snapshotId, tieWarnings },
@@ -525,7 +598,6 @@ export async function acknowledgeBase(
   const reason = typeof input.reason === 'string' ? input.reason.trim() : '';
   const proxy = actor.type === 'ADMIN';
   const source = opts.channel ?? (proxy ? 'ADMIN_PROXY' : 'LEADER');
-  if (proxy && !reason) throw bizError('REASON_REQUIRED', '代记底标确认须注明原因');
   return runWrite(
     ctx,
     eventId,

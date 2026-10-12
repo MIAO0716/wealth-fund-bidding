@@ -23,6 +23,8 @@ const ACTION_NAMES: Record<string, string> = {
   GROUP_REOPENED: '重新开放组别',
   GROUP_CLOSED: '结束组别',
   PROJECT_LOCKED: '项目锁定',
+  PROJECT_LOCKED_EARLY: '提前收场',
+  BID_CORRECTED: '工作人员更正增幅（下调）',
   BASE_ACK: '领导确认认领底标',
   BASE_ACK_PROXY: '工作人员代记底标确认',
 };
@@ -148,7 +150,7 @@ export async function collectExport(tx: Tx, eventId: string): Promise<ExportData
     deltaPp: b.delta_pp,
     target: wanNum(b.target_fen),
     at: formatShanghai(b.accepted_at),
-    source: b.source === 'ADMIN_PROXY' ? '工作人员代录' : b.source === 'KDOCS' ? '领导提交（金山文档）' : '领导提交',
+    source: b.source === 'ADMIN_PROXY' ? '工作人员代录' : b.source === 'ADMIN_CORRECTION' ? '工作人员更正（下调）' : b.source === 'KDOCS' ? '领导提交（金山文档）' : '领导提交',
     reason: b.reason ?? '',
   }));
 

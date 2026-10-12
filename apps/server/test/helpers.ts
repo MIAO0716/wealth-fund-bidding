@@ -142,8 +142,17 @@ export async function publish(ctx: Ctx, eventId: string, projectCode: ProjectCod
   });
 }
 
-/** 测试中提前收场的锁定（未结束全部分组）：须单独确认并填写原因 */
-export const EARLY_LOCK = { earlyLock: true, reason: '测试：提前收场' };
+/** 会前准备：理财、基金首轮一起冻结 */
+export async function publishAll(ctx: Ctx, eventId: string) {
+  const fr = await call(ctx.app, 'GET', `/api/v1/admin/events/${eventId}/first-round`, { cookie: ctx.adminCookie });
+  return call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/first-round/publish`, {
+    cookie: ctx.adminCookie,
+    body: { expectedDraftVersion: fr.body.draftVersion, idempotencyKey: idem('pub'), confirm: true },
+  });
+}
+
+/** 测试中提前收场的锁定（未结束全部分组）：须单独勾选确认 */
+export const EARLY_LOCK = { earlyLock: true };
 
 export async function control(
   ctx: Ctx,

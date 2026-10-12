@@ -52,7 +52,7 @@ export function registerAuthRoutes(api: FastifyInstance, deps: AppDeps): void {
     publicBaseUrl: ctx.config.publicBaseUrl,
   }));
 
-  /** 领导扫码：一次性凭证换取单位会话，前端随后从地址栏移除凭证 */
+  /** 领导扫码：凭证换取单位会话（可重复扫码，新登录让旧手机下线），前端随后从地址栏移除凭证 */
   api.post('/auth/bidder/exchange', async (req, reply) => {
     const body = (req.body ?? {}) as { token?: unknown };
     const r = await limited([[credentialByIp, ipOf(req)]], () => exchangeUnitCredential(ctx, body.token, req.headers['user-agent']));

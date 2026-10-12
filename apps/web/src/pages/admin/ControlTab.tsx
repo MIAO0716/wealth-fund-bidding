@@ -13,9 +13,9 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
   const [project, setProject] = useState<ProjectCode>(state.event.currentProject);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [reasonFor, setReasonFor] = useState<{ title: string; run: (reason: string) => Promise<void> } | null>(null);
+  const [confirmFor, setConfirmFor] = useState<{ title: string; body?: string; run: () => Promise<void> } | null>(null);
   const [lockOpen, setLockOpen] = useState(false);
-  const [proxyBid, setProxyBid] = useState<LiveRow | null>(null);
+  const [proxyBid, setProxyBid] = useState<{ row: LiveRow; groupOpen: boolean; acknowledged: boolean } | null>(null);
   const base = `/api/v1/admin/events/${eventId}`;
   const p = state.projects[project];
   const boards = state.boards[project];
@@ -37,12 +37,13 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
     } catch (e) {
       setMsg({ ok: false, text: errorText(e) });
       reload();
-      // 金山表格有单位没读到：默认拦截结束本组/锁定；核对后可填写原因强制执行（记入审计）
+      // 金山表格有单位没读到：默认拦截结束本组/锁定；核对后确认可继续（记入审计）
       if (e instanceof ApiError && e.code === 'KDOCS_INCOMPLETE' && extra.kdocsForce !== true) {
         const units: string[] = e.details?.units ?? [];
-        setReasonFor({
-          title: `金山表格有 ${units.length} 家没有读取成功（${units.join('、')}）。已电话或现场核对过这些单位的最后报价，仍要继续？请填写原因`,
-          run: (reason) => control(action, { ...extra, kdocsForce: true, kdocsForceReason: reason }),
+        setConfirmFor({
+          title: '金山表格没有全部读取成功',
+          body: `有 ${units.length} 家没有读取成功（${units.join('、')}）。已电话或现场核对过这些单位的最后报价，仍要继续？`,
+          run: () => control(action, { ...extra, kdocsForce: true }),
         });
       }
       throw e;
@@ -62,10 +63,11 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
   };
 
   const proxyAck = (unitCode: string, unitName: string) =>
-    setReasonFor({
+    setConfirmFor({
       title: `代记底标确认：${unitName}`,
-      run: async (reason) => {
-        await api.post(`${base}/projects/${project}/units/${unitCode}/base-ack`, { reason, idempotencyKey: newIdempotencyKey('ack') });
+      body: `替${unitName}领导确认认领基础底标（已与领导现场确认）？`,
+      run: async () => {
+        await api.post(`${base}/projects/${project}/units/${unitCode}/base-ack`, { idempotencyKey: newIdempotencyKey('ack') });
         setMsg({ ok: true, text: `${unitName}底标确认已代记` });
         reload();
       },
@@ -75,7 +77,7 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
     // 首轮已发布、尚未开始：一步完成「开始竞标 + 开放本组」
     if (p.status === 'ROUND1_PUBLISHED') return safe(() => control('START', { groupNo }))();
     if (!closed) return safe(() => control('OPEN_GROUP', { groupNo }))();
-    setReasonFor({ title: `重新开放第${groupNo}组（原增幅不会下调）`, run: (reason) => control('OPEN_GROUP', { groupNo, reason }) });
+    setConfirmFor({ title: `重新开放第${groupNo}组`, body: '该组领导可以继续追加，原增幅保持不变。确认重新开放？', run: () => control('OPEN_GROUP', { groupNo }) });
   };
 
   const openGroupNo = p.groups.find((g) => g.status === 'OPEN')?.groupNo;
@@ -202,7 +204,7 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
       <div className="a-card">
         <h3>实时榜单（管理视图，含金额与底标确认）</h3>
         <p className="small muted" style={{ marginTop: -6 }}>
-          「代记」替领导确认认领底标，首轮发布后随时可用；「代录」替领导加码，只能在该单位所在组「进行中」时使用。两者都须填写原因。
+          「代记」替领导确认认领底标；「代录」替领导追加（该组进行中时），或在领导误操作时「下调更正」（锁定前随时可用，不低于首轮）。操作前会弹窗确认，全部记入审计。
         </p>
         {boards.length === 0 ? (
           <p className="muted">首轮发布后显示</p>
@@ -259,17 +261,9 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
                                 )}
                                 <button
                                   className="btn btn-sm"
-                                  onClick={() => setProxyBid(r)}
-                                  disabled={p.status !== 'LIVE' || g.status !== 'OPEN'}
-                                  title={
-                                    p.status === 'PAUSED'
-                                      ? '竞标已暂停，恢复后可代录'
-                                      : g.status !== 'OPEN'
-                                        ? `${g.name}开放后可代录`
-                                        : !a?.acknowledged
-                                          ? '请先「代记」底标确认'
-                                          : ''
-                                  }
+                                  onClick={() => setProxyBid({ row: r, groupOpen: p.status === 'LIVE' && g.status === 'OPEN', acknowledged: !!a?.acknowledged })}
+                                  disabled={p.status !== 'LIVE' && p.status !== 'PAUSED'}
+                                  title={p.status === 'LIVE' || p.status === 'PAUSED' ? '代录追加，或下调更正' : '竞标开始后可用'}
                                 >
                                   代录
                                 </button>
@@ -299,7 +293,17 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
                 <td className="num">
                   {b.fromPp}% → <b>{b.toPp}%</b>
                 </td>
-                <td>{b.source === 'ADMIN_PROXY' ? <span className="chip gold">代录</span> : b.source === 'KDOCS' ? <span className="chip">金山文档</span> : <span className="chip">领导</span>}</td>
+                <td>
+                  {b.source === 'ADMIN_PROXY' ? (
+                    <span className="chip gold">代录</span>
+                  ) : b.source === 'ADMIN_CORRECTION' ? (
+                    <span className="chip red">更正</span>
+                  ) : b.source === 'KDOCS' ? (
+                    <span className="chip">金山文档</span>
+                  ) : (
+                    <span className="chip">领导</span>
+                  )}
+                </td>
                 <td className="small muted">{fmtTime(b.acceptedAt)}</td>
               </tr>
             ))}
@@ -307,7 +311,7 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
         </table>
       </div>
 
-      {reasonFor && <ReasonModal title={reasonFor.title} onClose={() => setReasonFor(null)} run={reasonFor.run} />}
+      {confirmFor && <ConfirmModal title={confirmFor.title} body={confirmFor.body} onClose={() => setConfirmFor(null)} run={confirmFor.run} />}
       {lockOpen && (
         <LockModal
           base={base}
@@ -323,7 +327,9 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
         <ProxyBidModal
           base={base}
           project={project}
-          row={proxyBid}
+          row={proxyBid.row}
+          groupOpen={proxyBid.groupOpen}
+          acknowledged={proxyBid.acknowledged}
           steps={state.event.config.allowedIncrementSteps}
           highPp={state.event.config.highValueConfirmPp}
           onClose={() => setProxyBid(null)}
@@ -338,8 +344,7 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
   );
 }
 
-function ReasonModal({ title, run, onClose }: { title: string; run: (reason: string) => Promise<void>; onClose: () => void }) {
-  const [reason, setReason] = useState('');
+function ConfirmModal({ title, body, run, onClose }: { title: string; body?: string; run: () => Promise<void>; onClose: () => void }) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   return (
@@ -353,11 +358,11 @@ function ReasonModal({ title, run, onClose }: { title: string; run: (reason: str
           </button>
           <button
             className="btn btn-primary"
-            disabled={!reason.trim() || busy}
+            disabled={busy}
             onClick={async () => {
               setBusy(true);
               try {
-                await run(reason.trim());
+                await run();
                 onClose();
               } catch (e) {
                 setErr(errorText(e));
@@ -371,10 +376,8 @@ function ReasonModal({ title, run, onClose }: { title: string; run: (reason: str
         </>
       }
     >
-      <label className="field">
-        <span>原因（必填，记入审计）</span>
-        <textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} />
-      </label>
+      {body && <p style={{ marginTop: 0 }}>{body}</p>}
+      <p className="small muted">确认后立即执行，并记入审计。</p>
       {err && <div className="notice">{err}</div>}
     </Modal>
   );
@@ -384,7 +387,7 @@ function LockModal(props: {
   base: string;
   project: ProjectCode;
   onClose: () => void;
-  onLock: (extra: { earlyLock?: boolean; reason?: string }) => Promise<void>;
+  onLock: (extra: { earlyLock?: boolean }) => Promise<void>;
 }) {
   const { base, project, onClose, onLock } = props;
   const [preview, setPreview] = useState<{
@@ -393,7 +396,6 @@ function LockModal(props: {
   } | null>(null);
   const [checked, setChecked] = useState(false);
   const [early, setEarly] = useState(false);
-  const [earlyReason, setEarlyReason] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -404,7 +406,7 @@ function LockModal(props: {
   }, [base, project]);
   const name = project === 'wealth' ? '理财' : '基金';
   const unfinished = preview?.unfinishedGroups ?? [];
-  const earlyOk = !unfinished.length || (early && earlyReason.trim() !== '');
+  const earlyOk = !unfinished.length || early;
   return (
     <Modal
       title={`锁定${name}（重大操作，不可退回）`}
@@ -420,7 +422,7 @@ function LockModal(props: {
             onClick={async () => {
               setBusy(true);
               try {
-                await onLock(unfinished.length ? { earlyLock: true, reason: earlyReason.trim() } : {});
+                await onLock(unfinished.length ? { earlyLock: true } : {});
               } catch (e) {
                 setErr(errorText(e));
               } finally {
@@ -436,7 +438,7 @@ function LockModal(props: {
       <ul style={{ paddingLeft: 18, lineHeight: 1.8 }}>
         <li>生成不可修改的结果快照，之后领导和管理员均不能追加；</li>
         <li>锁定前已提交的加码全部计入，之后的提交全部拒绝；</li>
-        {project === 'wealth' && <li>理财锁定后才可发布基金首轮。</li>}
+        {project === 'wealth' && <li>理财锁定后，领导手机自动转到基金专场，可开始基金竞标。</li>}
       </ul>
       {preview?.tieWarnings.map((t) => (
         <div className="notice" key={t.message} style={{ marginBottom: 8 }}>
@@ -448,21 +450,11 @@ function LockModal(props: {
           <b>
             {unfinished.map((g) => `${g.name}（${g.statusText}）`).join('、')}尚未结束。
           </b>
-          正常锁定要求各组都已结束。确需提前收场，请单独确认并填写原因（记入审计）：
+          正常锁定要求各组都已结束。确需提前收场，请单独勾选确认（记入审计）：
           <label className="a-row" style={{ marginTop: 8 }}>
             <input type="checkbox" checked={early} onChange={(e) => setEarly(e.target.checked)} />
             确认提前收场：以上分组不再竞标，按当前结果锁定
           </label>
-          {early && (
-            <textarea
-              aria-label="提前收场原因"
-              placeholder="原因，例如：时间不足，主持人宣布提前收场"
-              value={earlyReason}
-              onChange={(e) => setEarlyReason(e.target.value)}
-              rows={2}
-              style={{ width: '100%', marginTop: 6 }}
-            />
-          )}
         </div>
       )}
       <label className="a-row">
@@ -482,63 +474,107 @@ function ProxyBidModal(props: {
   base: string;
   project: ProjectCode;
   row: LiveRow;
+  groupOpen: boolean;
+  acknowledged: boolean;
   steps: number[];
   highPp: number;
   onClose: () => void;
   onDone: (t: string) => void;
 }) {
   const { row } = props;
+  const canUp = props.groupOpen && props.acknowledged;
+  const canDown = row.currentPp > row.firstRoundPp;
+  const [mode, setMode] = useState<'up' | 'down'>(canUp || !canDown ? 'up' : 'down');
   const [step, setStep] = useState(props.steps[0] ?? 1);
-  const [reason, setReason] = useState('');
+  const [downTo, setDownTo] = useState(Math.max(row.firstRoundPp, row.currentPp - 1));
   const [high, setHigh] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const to = row.currentPp + step;
-  const needHigh = to >= props.highPp;
+  const to = mode === 'up' ? row.currentPp + step : downTo;
+  const needHigh = mode === 'up' && to >= props.highPp;
+  const downOk = Number.isInteger(downTo) && downTo < row.currentPp && downTo >= row.firstRoundPp;
   const submit = async () => {
     setBusy(true);
     setErr(null);
     try {
-      const r = await api.post(`${props.base}/projects/${props.project}/units/${row.unitCode}/bids`, {
+      const url = `${props.base}/projects/${props.project}/units/${row.unitCode}/${mode === 'up' ? 'bids' : 'correct'}`;
+      const r = await api.post(url, {
         targetIncreasePp: to,
         expectedBidVersion: row.bidVersion,
-        idempotencyKey: newIdempotencyKey('proxy'),
-        reason: reason.trim(),
-        confirmHighValue: needHigh && high,
+        idempotencyKey: newIdempotencyKey(mode === 'up' ? 'proxy' : 'fix'),
+        ...(mode === 'up' ? { confirmHighValue: needHigh && high } : {}),
       });
-      props.onDone(`已代录 ${row.unitName} ${r.receipt.fromPp}% → ${r.receipt.toPp}%（回执 ${r.receipt.receiptNo}）`);
+      props.onDone(
+        `${mode === 'up' ? '已代录' : '已更正'} ${row.unitName} ${r.receipt.fromPp}% → ${r.receipt.toPp}%（回执 ${r.receipt.receiptNo}）`,
+      );
     } catch (e) {
       setErr(errorText(e));
     } finally {
       setBusy(false);
     }
   };
+  const upBlocked = !props.groupOpen ? '本组不在进行中，不能代录追加（可下调更正）' : !props.acknowledged ? '请先「代记」底标确认' : null;
   return (
     <Modal
-      title={`代录加码：${row.unitName}`}
+      title={`代录：${row.unitName}`}
       onClose={props.onClose}
       footer={
         <>
           <button className="btn" onClick={props.onClose}>
             取消
           </button>
-          <button className="btn btn-primary" onClick={() => void submit()} disabled={busy || !reason.trim() || (needHigh && !high)}>
-            确认代录（不可下调）
+          <button
+            className={`btn ${mode === 'down' ? 'btn-danger-outline' : 'btn-primary'}`}
+            onClick={() => void submit()}
+            disabled={busy || (mode === 'up' ? !!upBlocked || (needHigh && !high) : !downOk)}
+          >
+            {mode === 'up' ? `确认代录 +${step} 个百分点` : `确认下调为 ${downTo}%`}
           </button>
         </>
       }
     >
-      <StepPicker steps={props.steps} value={step} onChange={setStep} disabled={busy} />
+      <div className="a-row" style={{ marginBottom: 12 }}>
+        <button className={`btn btn-sm ${mode === 'up' ? 'btn-primary' : ''}`} onClick={() => setMode('up')}>
+          代录追加
+        </button>
+        <button className={`btn btn-sm ${mode === 'down' ? 'btn-primary' : ''}`} onClick={() => setMode('down')} disabled={!canDown}>
+          下调更正（误操作）
+        </button>
+      </div>
+      {mode === 'up' ? (
+        <>
+          <StepPicker steps={props.steps} value={step} onChange={setStep} disabled={busy} />
+          {upBlocked && <div className="notice" style={{ marginTop: 8 }}>{upBlocked}</div>}
+        </>
+      ) : (
+        <>
+          <label className="field">
+            <span>
+              更正后的增幅（%）：须低于当前 {row.currentPp}%，且不低于首轮 {row.firstRoundPp}%
+            </span>
+            <input
+              type="number"
+              inputMode="numeric"
+              aria-label="更正后的增幅"
+              min={row.firstRoundPp}
+              max={row.currentPp - 1}
+              value={Number.isFinite(downTo) ? downTo : ''}
+              onChange={(e) => setDownTo(e.target.value === '' ? NaN : Math.trunc(Number(e.target.value)))}
+            />
+          </label>
+          <p className="small muted">用于领导误操作后按其真实意愿改回。大屏与领导手机立即更新，流水中标注「工作人员更正」。</p>
+        </>
+      )}
       <div className="m-confirm-row num">
         <span className="from">{row.currentPp}%</span>
         <span className="arrow">→</span>
-        <span className="to">{to}%</span>
+        <span className="to">{Number.isFinite(to) ? `${to}%` : '—'}</span>
       </div>
-      {row.baseTargetWan && <p className="num" style={{ textAlign: 'center' }}>目标 {wan2(previewTargetWan(row.baseTargetWan, to))} 万元</p>}
-      <label className="field">
-        <span>代录原因（必填，例如「网络中断，领导现场口头确认」）</span>
-        <textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} />
-      </label>
+      {row.baseTargetWan && Number.isFinite(to) && (
+        <p className="num" style={{ textAlign: 'center' }}>
+          目标 {wan2(previewTargetWan(row.baseTargetWan, to))} 万元
+        </p>
+      )}
       {needHigh && (
         <label className="a-row" style={{ marginTop: 8 }}>
           <input type="checkbox" checked={high} onChange={(e) => setHigh(e.target.checked)} /> 增幅达到 {to}%，已与领导明确确认

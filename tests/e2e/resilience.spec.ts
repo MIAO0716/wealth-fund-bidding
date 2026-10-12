@@ -69,7 +69,7 @@ test('A21 大屏断网 20 秒后恢复：显示断线并保留数据，恢复后
   const screenCtx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   const screen = await screenCtx.newPage();
   await screen.goto(screenUrl);
-  const pdCurrent = screen.locator('.s-row', { hasText: '浦东' }).locator('.s-current');
+  const pdCurrent = screen.locator('.s-prow', { hasText: '浦东' }).locator('.s-current');
   await expect(pdCurrent).toContainText('10');
   await expect(screen.getByText('实时同步')).toBeVisible();
   await bidTo(15);
@@ -89,7 +89,7 @@ test('A21 大屏断网 20 秒后恢复：显示断线并保留数据，恢复后
   await expect(pdCurrent).toContainText('25', { timeout: 20_000 });
   await expect(screen.getByText('实时同步')).toBeVisible({ timeout: 20_000 });
   // 首轮值不变；最新加码记录不重复
-  await expect(screen.locator('.s-row', { hasText: '浦东' }).locator('.s-first')).toContainText('10');
+  await expect(screen.locator('.s-prow', { hasText: '浦东' }).locator('.s-first')).toContainText('10');
   const feed = await screen.locator('.s-feed-item').allTextContents();
   expect(feed.filter((t) => t.includes('20% → 25%'))).toHaveLength(1);
   await Promise.all([admin.close(), phone.close(), screenCtx.close()]);
@@ -107,8 +107,8 @@ test('工作人员撤销该单位访问后，旧手机无需刷新即提示会�
   });
   await page.goto('/bid');
   await expect(page.getByText('实时同步')).toBeVisible({ timeout: 10_000 });
-  await admin.request.post(`/api/v1/admin/events/${eventId}/units/PD/revoke`, { headers: H, data: { reason: 'E2E 换手机' } });
-  await expect(page.getByText('会话失效，请联系工作人员重新扫码')).toBeVisible({ timeout: 8_000 });
+  await admin.request.post(`/api/v1/admin/events/${eventId}/units/PD/revoke`, { headers: H, data: {} });
+  await expect(page.getByText(/本机未登录或已下线/)).toBeVisible({ timeout: 8_000 });
   const after = streamRequests;
   await page.waitForTimeout(5_000);
   expect(streamRequests).toBe(after);
@@ -126,7 +126,7 @@ test('SSE 被拦截时降级为 2 秒拉取，数据仍然更新', async ({ brow
   await screen.goto(screenUrl);
   await expect(screen.getByText('降级刷新（每 2 秒）')).toBeVisible({ timeout: 20_000 });
   await bidTo(15);
-  await expect(screen.locator('.s-row', { hasText: '浦东' }).locator('.s-current')).toContainText('15', { timeout: 5_000 });
+  await expect(screen.locator('.s-prow', { hasText: '浦东' }).locator('.s-current')).toContainText('15', { timeout: 5_000 });
   await Promise.all([admin.close(), phone.close(), screenCtx.close()]);
 });
 

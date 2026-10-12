@@ -24,7 +24,7 @@ interface Issued {
 const CRED_LABEL: Record<UnitAccess['credentialStatus'], [string, string]> = {
   NONE: ['未发放', 'grey'],
   ISSUED: ['已发放待扫码', 'gold'],
-  USED: ['已扫码', 'green'],
+  USED: ['已扫码（可再扫）', 'green'],
   EXPIRED: ['已过期', 'red'],
   REVOKED: ['已作废', 'grey'],
 };
@@ -58,26 +58,32 @@ export function AccessTab({ eventId, state, me }: TabProps) {
     }
   };
 
-  const issueOne = (u: UnitAccess, revokeSessions: boolean) =>
+  const issueOne = (u: UnitAccess) =>
     wrap(async () => {
-      if (u.credentialStatus !== 'NONE' && !window.confirm(`重新发放将作废${u.unitName}此前未使用的二维码${revokeSessions ? '，并让已登录的手机下线' : ''}，继续？`)) return;
-      const r = await api.post<CardCredential & { card: CardInfo }>(`${base}/units/${u.unitCode}/credentials`, { revokeSessions });
+      if (u.credentialStatus !== 'NONE' && !window.confirm(`重新发放将作废${u.unitName}此前的二维码（已登录的手机不受影响），继续？`)) return;
+      const r = await api.post<CardCredential & { card: CardInfo }>(`${base}/units/${u.unitCode}/credentials`, { revokeSessions: false });
       setIssued({ creds: [r], card: r.card });
     });
 
   const issueAll = () =>
     wrap(async () => {
-      if (!window.confirm('将为 16 家单位重新生成二维码，此前未使用的二维码全部作废（已登录的手机不受影响）。继续？')) return;
+      if (!window.confirm('将为 16 家单位重新生成二维码，此前的二维码全部作废（已登录的手机不受影响）。继续？')) return;
       const r = await api.post<{ credentials: CardCredential[]; card: CardInfo }>(`${base}/credentials/batch`);
       setIssued({ creds: r.credentials, card: r.card });
     });
 
+  const kick = (u: UnitAccess) =>
+    wrap(async () => {
+      if (!window.confirm(`让${u.unitName}当前登录的手机下线？\n二维码继续有效，领导用任一手机重新扫码即可继续。`)) return;
+      await api.post(`${base}/units/${u.unitCode}/kick`);
+      setMsg({ ok: true, text: `${u.unitName}的手机已强制下线，领导重新扫码即可继续` });
+    });
+
   const revoke = (u: UnitAccess) =>
     wrap(async () => {
-      const reason = window.prompt(`撤销${u.unitName}的全部会话与未使用二维码，请填写原因：`);
-      if (!reason) return;
-      await api.post(`${base}/units/${u.unitCode}/revoke`, { reason });
-      setMsg({ ok: true, text: `${u.unitName}会话已撤销，请重新发放二维码` });
+      if (!window.confirm(`作废${u.unitName}的二维码？\n已登录的手机会下线，原二维码不能再用，需要重新发放。`)) return;
+      await api.post(`${base}/units/${u.unitCode}/revoke`, {});
+      setMsg({ ok: true, text: `${u.unitName}的二维码已作废，请重新发放` });
     });
 
   return (
@@ -95,7 +101,7 @@ export function AccessTab({ eventId, state, me }: TabProps) {
           </button>
         </h3>
         <p className="small muted">
-          二维码地址：{me.publicBaseUrl}/join#…（由服务器配置 PUBLIC_BASE_URL 决定，手机必须能访问该地址；不能是 localhost）。同一二维码理财、基金通用；一次性使用，扫码后绑定该手机。
+          二维码地址：{me.publicBaseUrl}/join#…（由服务器配置 PUBLIC_BASE_URL 决定，手机必须能访问该地址；不能是 localhost）。同一二维码理财、基金通用；有效期内可重复扫码，同一时间只有一部手机在线——换手机直接用新手机扫码，旧手机自动下线。
           凭证只在生成时显示一次，请当场打印或发送。
         </p>
         {!units ? (
@@ -109,7 +115,7 @@ export function AccessTab({ eventId, state, me }: TabProps) {
                 <th>二维码</th>
                 <th>发放时间</th>
                 <th>有效期至</th>
-                <th>在线会话</th>
+                <th>在线手机</th>
                 <th>最近活跃</th>
                 <th />
               </tr>
@@ -124,18 +130,18 @@ export function AccessTab({ eventId, state, me }: TabProps) {
                   </td>
                   <td className="small">{fmtTime(u.credentialIssuedAt, true)}</td>
                   <td className="small">{fmtTime(u.credentialExpiresAt, true)}</td>
-                  <td>{u.activeSessions > 0 ? <span className="chip green">{u.activeSessions}</span> : <span className="chip grey">0</span>}</td>
+                  <td>{u.activeSessions > 0 ? <span className="chip green">在线</span> : <span className="chip grey">未登录</span>}</td>
                   <td className="small">{fmtTime(u.lastSeenAt)}</td>
                   <td className="r">
                     <div className="a-row" style={{ justifyContent: 'flex-end', gap: 4 }}>
-                      <button className="btn btn-sm" disabled={busy} onClick={() => void issueOne(u, false)}>
+                      <button className="btn btn-sm" disabled={busy} onClick={() => void issueOne(u)}>
                         {u.credentialStatus === 'NONE' ? '发放' : '重发'}
                       </button>
-                      <button className="btn btn-sm" disabled={busy} onClick={() => void issueOne(u, true)} title="重发并让已登录手机下线">
-                        换手机
+                      <button className="btn btn-sm" disabled={busy || u.activeSessions === 0} onClick={() => void kick(u)} title="让当前手机下线，二维码继续有效">
+                        强制下线
                       </button>
-                      <button className="btn btn-sm" disabled={busy} onClick={() => void revoke(u)}>
-                        撤销
+                      <button className="btn btn-sm" disabled={busy || u.credentialStatus === 'NONE'} onClick={() => void revoke(u)} title="作废二维码并让手机下线，需要重新发放">
+                        作废
                       </button>
                     </div>
                   </td>
@@ -214,7 +220,7 @@ export function AccessTab({ eventId, state, me }: TabProps) {
           }
         >
           <p className="small muted">
-            二维码一次性使用、扫码后绑定该手机，有效期至 {fmtTime(issued.creds[0]?.expiresAt, true)}。请勿投屏或外传。
+            二维码有效期至 {fmtTime(issued.creds[0]?.expiresAt, true)}，可重复扫码；同一时间只有一部手机在线。请勿投屏或外传。
             {!issued.card.wifi && ' 如需在卡上印「扫码连 Wi-Fi」，请先在「准备与配置」填写会场 Wi-Fi。'}
           </p>
           <div className="card-grid">

@@ -46,7 +46,7 @@ interface ResultGroup {
   name: string;
   minIncreasePp: number;
   leaderStatus: string;
-  rows: Array<{ unitCode: string; unitName: string; firstRoundPp: number; finalPp: number; addedPp: number; rank: number; isTop: boolean; leaderLabel: string }>;
+  rows: Array<{ unitCode: string; unitName: string; firstRoundPp: number; finalPp: number; addedPp: number; rank: number; isTop: boolean; leaderLabel: string; targetWan?: string }>;
 }
 interface ResultsSnapshot {
   seq: number;
@@ -200,6 +200,13 @@ function Head({ title, sub, right }: { title: string; sub: ReactNode; right: Rea
 
 // ------------------------------------------------------------------ 实时竞标大屏
 
+/** 当前展示的组：进行中的组；没有进行中时停留在最近开放过的组（显示该组最终结果）；尚未开始时为第一组 */
+function focusGroupNo(p: ProjectView): number {
+  return p.groups.find((g) => g.status === 'OPEN')?.groupNo ?? p.currentGroup ?? p.groups[0]?.groupNo ?? 1;
+}
+
+const TRANSITION_MS = 900;
+
 function LiveScreen({ eventId, project }: { eventId: string; project: ProjectCode | null }) {
   const base = `/api/v1/screen/events/${eventId}`;
   const [flash, setFlash] = useState<Record<string, number>>({});
@@ -208,21 +215,36 @@ function LiveScreen({ eventId, project }: { eventId: string; project: ProjectCod
   const chimeRef = useRef(chime);
   chimeRef.current = chime;
   const onMessage = (m: RealtimeMessage) => {
-    if (m.type === 'BID_ACCEPTED' && m.unitCode) {
+    if ((m.type === 'BID_ACCEPTED' || m.type === 'BID_CORRECTED') && m.unitCode) {
       setFlash((f) => ({ ...f, [m.unitCode!]: m.seq }));
-      chimeRef.current();
+      if (m.type === 'BID_ACCEPTED') chimeRef.current();
     }
   };
   const { data, conn, lastSyncAt } = useRealtime<LiveSnapshot>(`${base}/live${project ? `?project=${project}` : ''}`, `${base}/stream`, onMessage);
 
-  // 领先变化轻提示
+  // 组切换转场：旧组淡出左移，新组从右侧滑入
+  const focusNo = data?.published ? focusGroupNo(data.project) : null;
+  const [shown, setShown] = useState<number | null>(null);
+  const [leaving, setLeaving] = useState<number | null>(null);
+  useEffect(() => {
+    if (focusNo === null || focusNo === shown) return;
+    if (shown !== null) {
+      setLeaving(shown);
+      const t = setTimeout(() => setLeaving(null), TRANSITION_MS);
+      setShown(focusNo);
+      return () => clearTimeout(t);
+    }
+    setShown(focusNo);
+  }, [focusNo]);
+
+  // 领先变化轻提示（只提示当前展示的组）
   const prevTop = useRef<Record<number, string>>({});
   useEffect(() => {
     if (!data?.published) return;
     for (const g of data.groups) {
       const key = g.topUnitCodes.join(',');
       const prev = prevTop.current[g.groupNo];
-      if (prev !== undefined && prev !== key && data.project.status === 'LIVE' && g.topUnitCodes.length) {
+      if (prev !== undefined && prev !== key && data.project.status === 'LIVE' && g.status === 'OPEN' && g.topUnitCodes.length) {
         const names = g.rows.filter((r) => g.topUnitCodes.includes(r.unitCode)).map((r) => r.unitName).join('、');
         setToast({ id: Date.now(), text: `${g.name}领先：${names} ${g.topPp}%` });
       }
@@ -239,11 +261,14 @@ function LiveScreen({ eventId, project }: { eventId: string; project: ProjectCod
 
   if (!data) return <Stage>{null}</Stage>;
   const p = data.project;
-  const openGroup = p.groups.find((g) => g.status === 'OPEN');
+  const focus = data.groups.find((g) => g.groupNo === (shown ?? focusNo));
+  const leavingGroup = leaving !== null ? data.groups.find((g) => g.groupNo === leaving) : undefined;
+  const focusUnits = new Set(focus?.rows.map((r) => r.unitCode) ?? []);
+  const feed = data.recentBids.filter((b) => focusUnits.has(b.unitCode));
   const sub = (
     <>
       <span>{PROJECT_NAMES[p.projectCode]}专场</span>
-      {openGroup && <span>当前：{openGroup.name}</span>}
+      {focus && <span>{focus.name}</span>}
     </>
   );
   return (
@@ -266,27 +291,33 @@ function LiveScreen({ eventId, project }: { eventId: string; project: ProjectCod
       )}
       {!data.published ? (
         <div className="s-center-msg">
-          {PROJECT_NAMES[p.projectCode]}首轮结果待现场发布
+          {PROJECT_NAMES[p.projectCode]}首轮结果待发布
           <small>请稍候</small>
         </div>
       ) : (
-        <div
-          className={`s-groups ${openGroup ? 'focus' : ''}`}
-          // 当前开放组放大：约占三分之二宽度，其余两组收窄成紧凑小卡片并降低亮度
-          style={openGroup ? { gridTemplateColumns: data.groups.map((g) => (g.status === 'OPEN' ? '3.6fr' : '1fr')).join(' ') } : undefined}
-        >
-          {data.groups.map((g) => (
-            <LiveGroup key={g.groupNo} g={g} flash={flash} anyOpen={!!openGroup} />
-          ))}
-        </div>
+        <>
+          <div className="s-progress">
+            {p.groups.map((g) => (
+              <span key={g.groupNo} className={`s-step ${g.groupNo === focus?.groupNo ? 'on' : ''} ${g.status === 'CLOSED' ? 'done' : ''}`}>
+                {g.name}
+                <small>{g.status === 'OPEN' ? '竞标中' : g.status === 'CLOSED' ? '已结束' : '待开始'}</small>
+              </span>
+            ))}
+          </div>
+          <div className="s-board-wrap">
+            {leavingGroup && <FocusPanel key={`leave-${leavingGroup.groupNo}`} g={leavingGroup} flash={{}} className="leave" />}
+            {focus && <FocusPanel key={`show-${focus.groupNo}`} g={focus} flash={flash} className={leaving !== null ? 'enter' : 'enter first'} />}
+          </div>
+        </>
       )}
       <div className="s-foot">
         <div className="s-feed-label">最新加码</div>
         <div className="s-feed">
-          {data.recentBids.length === 0 && <span className="s-feed-item">暂无</span>}
-          {data.recentBids.map((b) => (
+          {feed.length === 0 && <span className="s-feed-item">暂无</span>}
+          {feed.map((b) => (
             <span className="s-feed-item num" key={b.bidId}>
-              {b.unitName} {PROJECT_NAMES[b.projectCode]} {b.fromPp}% → <b>{b.toPp}%</b>
+              {b.unitName} {b.fromPp}% → <b>{b.toPp}%</b>
+              {b.source === 'ADMIN_CORRECTION' ? '（更正）' : ''}
             </span>
           ))}
         </div>
@@ -296,47 +327,79 @@ function LiveScreen({ eventId, project }: { eventId: string; project: ProjectCod
   );
 }
 
-function LiveGroup({ g, flash, anyOpen }: { g: GroupBoard; flash: Record<string, number>; anyOpen: boolean }) {
-  const stateText = g.status === 'OPEN' ? '进行中' : g.status === 'CLOSED' ? '已结束' : '等待';
+/** 排名变化时行平滑移动到新位置（FLIP） */
+function useRowMotion(order: string) {
+  const refs = useRef(new Map<string, HTMLDivElement>());
+  const prev = useRef(new Map<string, number>());
+  useLayoutEffect(() => {
+    const next = new Map<string, number>();
+    refs.current.forEach((el, code) => {
+      const top = el.offsetTop;
+      next.set(code, top);
+      const before = prev.current.get(code);
+      if (before !== undefined && before !== top) {
+        el.style.transition = 'none';
+        el.style.transform = `translateY(${before - top}px)`;
+        requestAnimationFrame(() => {
+          el.style.transition = 'transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1)';
+          el.style.transform = '';
+        });
+      }
+    });
+    prev.current = next;
+  }, [order]);
+  return (code: string) => (el: HTMLDivElement | null) => {
+    if (el) refs.current.set(code, el);
+    else refs.current.delete(code);
+  };
+}
+
+function FocusPanel({ g, flash, className }: { g: GroupBoard; flash: Record<string, number>; className: string }) {
+  const closed = g.status === 'CLOSED';
+  const waiting = g.status === 'WAITING';
+  const withAmounts = g.rows.some((r) => r.targetWan !== undefined);
   const leaderNames = g.rows.filter((r) => g.topUnitCodes.includes(r.unitCode)).map((r) => r.unitName).join('、');
+  const rowRef = useRowMotion(g.rows.map((r) => r.unitCode).join(','));
   let leaderText: ReactNode;
-  if (g.leaderStatus === 'CHAMPION_CANDIDATE') leaderText = <span className="s-leader">标王候选：{leaderNames}</span>;
+  if (g.leaderStatus === 'CHAMPION_CANDIDATE') leaderText = <span className="s-leader">{closed ? '本组标王' : '标王候选'}：{leaderNames}</span>;
   else if (g.leaderStatus === 'TIED_PENDING') leaderText = <span className="s-leader">并列领先·待确认：{leaderNames}</span>;
-  else leaderText = <span className="s-leader none">暂无符合门槛的标王候选</span>;
+  else leaderText = <span className="s-leader none">暂无达到 30% 的标王候选</span>;
   return (
-    <div className={`s-group ${g.status === 'OPEN' ? 'open' : anyOpen ? 'dim' : ''}`}>
-      <div className="s-group-head">
-        <div className="s-group-name">
+    <div className={`s-panel ${className} ${closed ? 'closed' : ''} ${g.status === 'OPEN' ? 'open' : ''} ${withAmounts ? 'amounts' : ''}`}>
+      <div className="s-panel-head">
+        <div className="s-panel-name">
           {g.name}
-          <span className="s-group-state">{stateText}</span>
+          <span className="s-panel-state">{g.status === 'OPEN' ? '竞标进行中' : closed ? '本组竞标结束 · 最终结果' : '即将开始'}</span>
         </div>
-        <div className="s-group-meta">
-          <span>最低增幅 {g.minIncreasePp}%</span>
-          {leaderText}
+        <div className="s-panel-meta">
+          <span>最低增幅 {g.minIncreasePp}% · 标王门槛 30%</span>
+          {!waiting && leaderText}
         </div>
       </div>
-      <div className="s-cols">
+      <div className="s-pcols">
         <span>排名</span>
         <span>单位</span>
-        <span>首轮</span>
+        <span>首轮增幅</span>
         <span>当前增幅</span>
+        {withAmounts && <span>竞标目标（万元）</span>}
       </div>
-      <div className="s-rows">
+      <div className="s-prows">
         {g.rows.map((r) => {
           const badge =
             r.isTop && g.leaderStatus === 'CHAMPION_CANDIDATE' ? (
-              <span className="s-badge">标王候选</span>
+              <span className="s-badge">{closed ? '标王' : '标王候选'}</span>
             ) : r.isTop && g.leaderStatus === 'TIED_PENDING' ? (
               <span className="s-badge outline">并列领先</span>
             ) : r.isTop && g.leaderStatus === 'GROUP_LEADER' && g.topUnitCodes.length < g.rows.length ? (
-              <span className="s-badge soft">{LEADER_STATUS_LABELS.GROUP_LEADER}</span>
+              <span className="s-badge soft">{closed ? '本组第一' : LEADER_STATUS_LABELS.GROUP_LEADER}</span>
             ) : null;
           return (
-            <div key={`${r.unitCode}-${flash[r.unitCode] ?? 0}`} className={`s-row ${r.isTop ? 'top' : ''} ${flash[r.unitCode] ? 'flash' : ''}`}>
+            <div key={r.unitCode} ref={rowRef(r.unitCode)} className={`s-prow ${r.isTop && !waiting ? 'top' : ''}`}>
+              {flash[r.unitCode] ? <span className="s-prow-flash" key={flash[r.unitCode]} /> : null}
               <span className="s-rank num">{r.rank}</span>
               <span className="s-unit">
                 {r.unitName}
-                {badge}
+                {!waiting && badge}
               </span>
               <span className="s-first num">
                 {r.firstRoundPp}
@@ -346,6 +409,7 @@ function LiveGroup({ g, flash, anyOpen }: { g: GroupBoard; flash: Record<string,
                 {r.currentPp}
                 <span className="pct">%</span>
               </span>
+              {withAmounts && <span className="s-target num">{wan2(r.targetWan)}</span>}
             </div>
           );
         })}
@@ -393,7 +457,7 @@ function FirstRoundScreen({ eventId, project }: { eventId: string; project: Proj
       <OfflineAlert conn={conn} />
       {!b.published ? (
         <div className="s-center-msg">
-          首轮结果待现场发布
+          首轮结果待发布
           <small>{PROJECT_NAMES[b.projectCode]}专场</small>
         </div>
       ) : (
@@ -478,7 +542,7 @@ function ResultsScreen({ eventId }: { eventId: string }) {
                       </span>
                     </h3>
                     {g.rows.map((r) => (
-                      <div className={`s-result-row ${r.isTop ? 'top' : ''}`} key={r.unitCode}>
+                      <div className={`s-result-row ${r.isTop ? 'top' : ''} ${r.targetWan !== undefined ? 'with-target' : ''}`} key={r.unitCode}>
                         <span className="num">{r.rank}</span>
                         <span className="name">
                           {r.unitName}
@@ -486,6 +550,7 @@ function ResultsScreen({ eventId }: { eventId: string }) {
                         </span>
                         <span className="first num">首轮 {r.firstRoundPp}%</span>
                         <span className="final num">{r.finalPp}%</span>
+                        {r.targetWan !== undefined && <span className="target num">{wan2(r.targetWan)}万</span>}
                       </div>
                     ))}
                   </div>

@@ -267,7 +267,7 @@ function BidMain({ eventId }: { eventId: string }) {
               </div>
             </>
           ) : (
-            <div className="m-current pending">{p.published ? '—' : '首轮结果待现场发布'}</div>
+            <div className="m-current pending">{p.published ? '—' : '首轮结果待发布'}</div>
           )}
           <div className="m-kv">
             <div>
@@ -382,7 +382,7 @@ function BidMain({ eventId }: { eventId: string }) {
                 <div className="m-history-row" key={b.receiptNo}>
                   <span className="num">
                     {b.fromPp}% → <b>{b.toPp}%</b>
-                    {b.source === 'ADMIN_PROXY' ? '（代录）' : b.source === 'KDOCS' ? '（金山文档）' : ''}
+                    {b.source === 'ADMIN_PROXY' ? '（代录）' : b.source === 'ADMIN_CORRECTION' ? '（工作人员更正）' : b.source === 'KDOCS' ? '（金山文档）' : ''}
                   </span>
                   <span className="num">{fmtTime(b.acceptedAt)}</span>
                 </div>
@@ -446,7 +446,7 @@ function BidMain({ eventId }: { eventId: string }) {
               </span>
             </label>
           )}
-          <div className="m-irrev">确认后不可下调</div>
+          <div className="m-irrev">确认后不可自行下调（误操作请立即告知工作人员）</div>
         </Modal>
       )}
 

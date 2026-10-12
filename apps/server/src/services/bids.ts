@@ -47,7 +47,6 @@ export async function submitBid(
   const proxy = actor.type === 'ADMIN';
   const source = opts.channel ?? (proxy ? 'ADMIN_PROXY' : 'LEADER');
   const reason = typeof input.reason === 'string' ? input.reason.trim() : '';
-  if (proxy && !reason) throw bizError('REASON_REQUIRED', '代录加码必须填写代录原因');
   if (typeof input.expectedBidVersion !== 'number' || !Number.isInteger(input.expectedBidVersion)) {
     throw bizError('BAD_REQUEST', 'expectedBidVersion 须为整数');
   }
@@ -180,6 +179,132 @@ export async function submitBid(
         unitCode,
         reason: reason || null,
         details: { receiptNo: receipt.receiptNo, fromPp: state.current_pp, toPp, channel: source },
+        eventSequence: seq,
+      });
+      return { statusCode: 201, body: receipt };
+    },
+  );
+}
+
+export interface CorrectInput {
+  targetIncreasePp?: unknown;
+  expectedBidVersion?: unknown;
+  idempotencyKey?: unknown;
+  reason?: unknown;
+}
+
+/**
+ * 管理端更正（下调）：现场领导误操作时，工作人员在锁定前把增幅改回正确值。
+ * 只允许管理员；目标须为整数、低于当前增幅、不低于首轮增幅（首轮快照不可动）。
+ * 竞标开始后到锁定前均可使用（含本组已结束、暂停核对时）；单独记流水与审计，大屏与手机即时更新。
+ */
+export async function correctBid(ctx: AppContext, eventId: string, actor: Actor, projectCodeRaw: unknown, unitCode: string, input: CorrectInput) {
+  const projectCode = parseProject(projectCodeRaw);
+  const unit = UNIT_BY_CODE.get(unitCode);
+  if (!unit) throw bizError('NOT_FOUND', '单位不存在');
+  if (actor.type !== 'ADMIN') throw bizError('FORBIDDEN', '只有工作人员可以更正增幅');
+  const reason = typeof input.reason === 'string' && input.reason.trim() ? input.reason.trim() : '工作人员更正（领导误操作）';
+  if (typeof input.expectedBidVersion !== 'number' || !Number.isInteger(input.expectedBidVersion)) {
+    throw bizError('BAD_REQUEST', 'expectedBidVersion 须为整数');
+  }
+  return runWrite<BidReceipt>(
+    ctx,
+    eventId,
+    actor,
+    {
+      operation: 'BID_CORRECT',
+      idempotencyKey: input.idempotencyKey,
+      request: { projectCode, unitCode, targetIncreasePp: input.targetIncreasePp, expectedBidVersion: input.expectedBidVersion },
+      storeFailures: true,
+      failureLog: { projectCode, unitCode },
+    },
+    async (tx) => {
+      const project = await lockProject(tx, eventId, projectCode);
+      if (project.status === 'LOCKED') throw bizError('PROJECT_LOCKED', '项目已锁定，结果不可更正');
+      if (project.status !== 'LIVE' && project.status !== 'PAUSED') throw bizError('PROJECT_NOT_ACTIVE', '竞标开始后才能更正增幅');
+      const s = await tx.query(
+        'SELECT * FROM bid_states WHERE event_id = $1 AND project_code = $2 AND unit_code = $3 FOR UPDATE',
+        [eventId, projectCode, unitCode],
+      );
+      const state = s.rows[0];
+      if (input.expectedBidVersion !== state.version) {
+        throw bizError('VERSION_CONFLICT', undefined, { currentPp: state.current_pp, bidVersion: state.version });
+      }
+      const toPp = input.targetIncreasePp;
+      if (typeof toPp !== 'number' || !Number.isInteger(toPp)) throw bizError('INVALID_VALUE', '目标增幅须为整数百分点');
+      if (toPp >= state.current_pp || toPp < state.first_round_pp) {
+        throw bizError('NOT_LOWER', `更正后的增幅须低于当前 ${state.current_pp}%，且不低于首轮 ${state.first_round_pp}%`, {
+          currentPp: state.current_pp,
+          firstRoundPp: state.first_round_pp,
+        });
+      }
+      const baseFen = BigInt(state.base_target_fen);
+      const tFen = targetFen(baseFen, toPp);
+      const newVersion = state.version + 1;
+      // 只在本事务内放开数据库「只增不减」兜底
+      await tx.query(`SELECT set_config('bidding.correction', 'on', true)`);
+      await tx.query(
+        `UPDATE bid_states SET current_pp = $4, version = $5, updated_at = now()
+          WHERE event_id = $1 AND project_code = $2 AND unit_code = $3`,
+        [eventId, projectCode, unitCode, toPp, newVersion],
+      );
+      await tx.query(`SELECT set_config('bidding.correction', 'off', true)`);
+      const bidId = uuid();
+      const acceptedAt = new Date();
+      const source = 'ADMIN_CORRECTION' as const;
+      const seq = await emit(tx, eventId, {
+        type: 'BID_CORRECTED',
+        audience: 'SCREEN',
+        projectCode,
+        unitCode,
+        data: { bidId, fromPp: state.current_pp, toPp, bidVersion: newVersion, source, acceptedAt: acceptedAt.toISOString() },
+      });
+      const receipt: BidReceipt = {
+        bidId,
+        receiptNo: receiptNo(projectCode, unitCode, newVersion, seq),
+        unitCode,
+        projectCode,
+        fromPp: state.current_pp,
+        toPp,
+        deltaPp: toPp - state.current_pp,
+        baseTargetWan: fenToWanExact(baseFen),
+        targetWan: fenToWanExact(tFen),
+        targetFen: tFen.toString(),
+        bidVersion: newVersion,
+        eventSequence: seq,
+        acceptedAt: acceptedAt.toISOString(),
+        source,
+      };
+      await tx.query(
+        `INSERT INTO bid_records (id, receipt_no, event_id, project_code, unit_code, from_pp, to_pp, delta_pp, base_target_fen, target_fen,
+                                  source, actor_type, actor_id, reason, bid_version, event_sequence, idempotency_key, accepted_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+        [
+          bidId,
+          receipt.receiptNo,
+          eventId,
+          projectCode,
+          unitCode,
+          state.current_pp,
+          toPp,
+          receipt.deltaPp,
+          baseFen.toString(),
+          tFen.toString(),
+          source,
+          actor.type,
+          actor.id,
+          reason,
+          newVersion,
+          seq,
+          String(input.idempotencyKey),
+          acceptedAt,
+        ],
+      );
+      await audit(tx, eventId, actor, 'BID_CORRECTED', {
+        projectCode,
+        unitCode,
+        reason,
+        details: { receiptNo: receipt.receiptNo, fromPp: state.current_pp, toPp },
         eventSequence: seq,
       });
       return { statusCode: 201, body: receipt };

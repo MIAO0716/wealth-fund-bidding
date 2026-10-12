@@ -478,7 +478,7 @@ export function KdocsTab({ eventId, state }: TabProps) {
                     <td>没有读到</td>
                     <td style={{ color: 'var(--red)' }}>
                       {st.missingUnits.join('、')}
-                      <span className="small">（结束本组、锁定前会拦截，需核对后填写原因才能继续）</span>
+                      <span className="small">（结束本组、锁定前会拦截，核对后确认才能继续）</span>
                     </td>
                   </tr>
                 )}

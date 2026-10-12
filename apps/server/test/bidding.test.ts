@@ -15,6 +15,7 @@ import { EARLY_LOCK,
   joinUnit,
   me,
   publish,
+  publishAll,
   setup,
 } from './helpers';
 
@@ -33,7 +34,9 @@ async function liveEvent(opts: { pdPp?: number } = {}) {
     ...fullRows('wealth', { pp: (c, m) => (c === 'PD' ? (opts.pdPp ?? 30) : m) }),
     ...fullRows('fund', { base: () => '200' }),
   ]);
-  await goLive(ctx, eventId, 'wealth', 1);
+  // 会前一起冻结理财、基金首轮，现场开始理财第一组
+  expect((await publishAll(ctx, eventId)).status).toBe(200);
+  expect((await control(ctx, eventId, 'wealth', 'START', { groupNo: 1 })).status).toBe(200);
   const pd = await joinUnit(ctx, eventId, 'PD');
   expect((await ack(ctx, eventId, 'wealth', pd)).status).toBe(200);
   return { eventId, pd };
@@ -54,14 +57,52 @@ describe('A07 发布理财首轮', () => {
     expect(sf.body.board.completeCount).toBe(16);
     expect(sf.body.board.groups.map((g: any) => g.rows.length)).toEqual([6, 5, 5]);
     expect(sf.body.board.groups[0].rows[0]).toMatchObject({ unitCode: 'PD', firstRoundPp: 30, rank: 1 });
-    // 默认大屏不展示金额
-    expect(sf.body.board.groups[0].rows[0].baseTargetWan).toBeUndefined();
+    // 默认大屏展示底标与目标金额
+    expect(sf.body.board.groups[0].rows[0]).toMatchObject({ baseTargetWan: '100.00', targetWan: '130.00' });
     const st = await getState(ctx, eventId);
     expect(st.boards.wealth[0].rows.find((r: any) => r.unitCode === 'PD')).toMatchObject({ firstRoundPp: 30, currentPp: 30 });
     // 重复发布被拒绝
     expect((await publish(ctx, eventId, 'wealth')).status).toBe(422);
     // 快照不可在数据库层被修改
     await expect(ctx.db.query(`UPDATE first_round_snapshot_rows SET first_round_pp = 50`)).rejects.toThrow(/禁止修改/);
+  });
+});
+
+describe('会前准备：理财、基金首轮一起冻结', () => {
+  it('任一项目不完整则都不冻结；完整后一起冻结，当前专场为理财，大屏切到理财首轮', async () => {
+    const eventId = await createFormalEvent(ctx);
+    await importRows(ctx, eventId, fullRows('wealth'));
+    const partial = await publishAll(ctx, eventId);
+    expect(partial.body.error.code).toBe('ROUND1_INCOMPLETE');
+    expect(partial.body.error.details.problems[0]).toContain('基金：');
+    const st0 = await getState(ctx, eventId);
+    expect([st0.projects.wealth.status, st0.projects.fund.status]).toEqual(['DRAFT', 'DRAFT']);
+    await importRows(ctx, eventId, fullRows('fund', { base: () => '200' }));
+    // 草稿版本过期被拒绝
+    const stale = await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/first-round/publish`, {
+      cookie: ctx.adminCookie,
+      body: { expectedDraftVersion: 0, idempotencyKey: idem('pub'), confirm: true },
+    });
+    expect(stale.body.error.code).toBe('DRAFT_VERSION_CONFLICT');
+    const ok = await publishAll(ctx, eventId);
+    expect(ok.status).toBe(200);
+    expect(ok.body.published.map((x: any) => x.projectCode)).toEqual(['wealth', 'fund']);
+    const st = await getState(ctx, eventId);
+    expect([st.projects.wealth.status, st.projects.fund.status]).toEqual(['ROUND1_PUBLISHED', 'ROUND1_PUBLISHED']);
+    expect(st.event).toMatchObject({ currentProject: 'wealth', screenMode: 'FIRST_ROUND', screenProject: 'wealth' });
+    // 领导可在会前分别认领理财、基金底标
+    const pd = await joinUnit(ctx, eventId, 'PD');
+    expect((await ack(ctx, eventId, 'wealth', pd)).status).toBe(200);
+    expect((await ack(ctx, eventId, 'fund', pd)).status).toBe(200);
+    expect((await publishAll(ctx, eventId)).body.error.code).toBe('INVALID_STATE');
+  });
+
+  it('只需活动名称与日期即可冻结（不再要求指标名称、口径、周期、说明）', async () => {
+    const eventId = await createFormalEvent(ctx, { name: '极简配置', eventDate: '2099-12-31' });
+    await importRows(ctx, eventId, [...fullRows('wealth'), ...fullRows('fund')]);
+    expect((await publishAll(ctx, eventId)).status).toBe(200);
+    const st = await getState(ctx, eventId);
+    expect(st.event.config).toMatchObject({ year: 2099, showAmountsOnScreen: true });
   });
 });
 
@@ -313,26 +354,45 @@ describe('A17 浦东改请求冒充闵行', () => {
     expect(JSON.stringify(mine)).not.toMatch(/"MH"|闵行/);
   });
 
-  it('一次性凭证不可重复使用；新会话登录后旧会话失效', async () => {
+  it('二维码可重复扫码；同一时间一部手机在线：新手机登录后旧手机下线', async () => {
     const eventId = await createFormalEvent(ctx);
     const issued = await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/units/PD/credentials`, { cookie: ctx.adminCookie, body: {} });
     const token = new URL(issued.body.joinUrl).hash.replace('#t=', '');
     const ex = () => ctx.app.inject({ method: 'POST', url: '/api/v1/auth/bidder/exchange', headers: { 'x-bidding-client': '1' }, payload: { token } });
     const first = await ex();
     expect(first.statusCode).toBe(200);
+    const oldCookie = (first.headers['set-cookie'] as string).split(';')[0];
+    // 换手机：同一二维码再次扫码成功，旧手机下线
     const second = await ex();
-    expect(second.statusCode).toBe(401);
-    const err = JSON.parse(second.body).error;
-    expect(err.code).toBe('CREDENTIAL_INVALID');
-    // 提示具体单位与处理办法
-    expect(err.message).toContain('浦东的二维码已在一部手机上使用过');
-    expect(err.details).toMatchObject({ unitName: '浦东', reason: 'USED' });
-    const oldCookie = first.headers['set-cookie'] as string;
-    const newCookie = await joinUnit(ctx, eventId, 'PD');
-    const oldMe = await call(ctx.app, 'GET', `/api/v1/bidder/events/${eventId}/me`, { cookie: oldCookie.split(';')[0] });
+    expect(second.statusCode).toBe(200);
+    const newCookie = (second.headers['set-cookie'] as string).split(';')[0];
+    const oldMe = await call(ctx.app, 'GET', `/api/v1/bidder/events/${eventId}/me`, { cookie: oldCookie });
     expect(oldMe.status).toBe(401);
     expect(oldMe.body.error.code).toBe('SESSION_INVALID');
+    expect(oldMe.body.error.message).toContain('另一部手机');
     expect((await call(ctx.app, 'GET', `/api/v1/bidder/events/${eventId}/me`, { cookie: newCookie })).status).toBe(200);
+    const units = await call(ctx.app, 'GET', `/api/v1/admin/events/${eventId}/units`, { cookie: ctx.adminCookie });
+    expect(units.body.units.find((u: any) => u.unitCode === 'PD')).toMatchObject({ credentialStatus: 'USED', activeSessions: 1 });
+
+    // 强制下线：当前手机下线，二维码继续有效
+    const kick = await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/units/PD/kick`, { cookie: ctx.adminCookie, body: {} });
+    expect(kick.body.kickedSessions).toBe(1);
+    expect((await call(ctx.app, 'GET', `/api/v1/bidder/events/${eventId}/me`, { cookie: newCookie })).status).toBe(401);
+    expect((await ex()).statusCode).toBe(200);
+
+    // 作废：二维码不能再用（含已扫过的），需重新发放
+    await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/units/PD/revoke`, { cookie: ctx.adminCookie, body: {} });
+    const after = await ex();
+    expect(after.statusCode).toBe(401);
+    expect(JSON.parse(after.body).error.details).toMatchObject({ unitName: '浦东', reason: 'REVOKED' });
+    // 重新发放后旧二维码（即使扫过）也作废
+    const re = await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/units/PD/credentials`, { cookie: ctx.adminCookie, body: {} });
+    const token2 = new URL(re.body.joinUrl).hash.replace('#t=', '');
+    const ex2 = await ctx.app.inject({ method: 'POST', url: '/api/v1/auth/bidder/exchange', headers: { 'x-bidding-client': '1' }, payload: { token: token2 } });
+    expect(ex2.statusCode).toBe(200);
+    await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/units/PD/credentials`, { cookie: ctx.adminCookie, body: {} });
+    const ex3 = await ctx.app.inject({ method: 'POST', url: '/api/v1/auth/bidder/exchange', headers: { 'x-bidding-client': '1' }, payload: { token: token2 } });
+    expect(ex3.statusCode).toBe(401);
   });
 
   it('缺少客户端请求头的写请求被拒绝', async () => {
@@ -342,10 +402,11 @@ describe('A17 浦东改请求冒充闵行', () => {
 });
 
 describe('A18 理财未锁定时开启基金', () => {
-  it('拒绝；理财锁定后基金可以发布和开始', async () => {
+  it('基金首轮可以会前冻结；但理财锁定后才能开始基金，锁定理财后当前专场自动转到基金', async () => {
     const { eventId } = await liveEvent();
-    const early = await publish(ctx, eventId, 'fund');
-    expect(early.body.error.code).toBe('PROJECT_ORDER');
+    // liveEvent 已一起冻结理财与基金首轮
+    expect((await getState(ctx, eventId)).projects.fund.status).toBe('ROUND1_PUBLISHED');
+    expect((await control(ctx, eventId, 'fund', 'START', { groupNo: 1 })).body.error.code).toBe('PROJECT_ORDER');
     for (const g of [1, 2, 3]) {
       if (g > 1) await control(ctx, eventId, 'wealth', 'OPEN_GROUP', { groupNo: g });
       await control(ctx, eventId, 'wealth', 'CLOSE_GROUP', { groupNo: g });
@@ -354,8 +415,7 @@ describe('A18 理财未锁定时开启基金', () => {
     expect((await getState(ctx, eventId)).projects.wealth.status).toBe('PAUSED');
     // 三组都已结束：正常锁定，不需要提前收场
     expect((await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true })).status).toBe(200);
-    const pub = await publish(ctx, eventId, 'fund');
-    expect(pub.status).toBe(200);
+    expect((await getState(ctx, eventId)).event.currentProject).toBe('fund');
     const st = await control(ctx, eventId, 'fund', 'START', { groupNo: 1 });
     expect(st.status).toBe(200);
     // 理财首轮快照不受基金影响
@@ -373,7 +433,7 @@ describe('A18 理财未锁定时开启基金', () => {
     expect((await control(ctx, eventId, 'wealth', 'RESUME')).body.error.code).toBe('PROJECT_LOCKED');
   });
 
-  it('提前收场：有分组未结束时正常锁定被拒绝；单独确认并填写原因后可锁定，记入审计', async () => {
+  it('提前收场：有分组未结束时正常锁定被拒绝；单独勾选确认后可锁定，记入审计', async () => {
     const { eventId } = await liveEvent();
     await control(ctx, eventId, 'wealth', 'CLOSE_GROUP', { groupNo: 1 });
     await control(ctx, eventId, 'wealth', 'PAUSE');
@@ -385,12 +445,11 @@ describe('A18 理财未锁定时开启基金', () => {
     const normal = await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true });
     expect(normal.body.error.code).toBe('GROUPS_NOT_FINISHED');
     expect(normal.body.error.message).toContain('第二组（未开始）、第三组（未开始）');
-    const noReason = await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true, earlyLock: true });
-    expect(noReason.body.error.code).toBe('REASON_REQUIRED');
-    const ok = await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true, earlyLock: true, reason: '时间不足，主持人宣布提前收场' });
+    // 不需要填写原因：勾选「提前收场」即可
+    const ok = await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true, earlyLock: true });
     expect(ok.status).toBe(200);
     const a = await ctx.db.query(`SELECT reason, details FROM audit_logs WHERE event_id = $1 AND action = 'PROJECT_LOCKED_EARLY'`, [eventId]);
-    expect(a.rows[0].reason).toBe('时间不足，主持人宣布提前收场');
+    expect(a.rows[0].reason).toBe('工作人员确认提前收场');
     expect(a.rows[0].details.unfinishedGroups.map((g: any) => g.groupNo)).toEqual([2, 3]);
   });
 
@@ -402,13 +461,12 @@ describe('A18 理财未锁定时开启基金', () => {
     expect(r.body.error.code).toBe('CONTROL_VERSION_CONFLICT');
   });
 
-  it('同时最多一个开放组；重新开放已结束组需理由且不下调', async () => {
+  it('同时最多一个开放组；重新开放已结束组只需确认，原增幅不变', async () => {
     const { eventId, pd } = await liveEvent();
     expect((await control(ctx, eventId, 'wealth', 'OPEN_GROUP', { groupNo: 2 })).body.error.message).toContain('第1组仍在进行');
     await bid(ctx, eventId, 'wealth', pd, { targetIncreasePp: 35, expectedBidVersion: 0 });
     await control(ctx, eventId, 'wealth', 'CLOSE_GROUP', { groupNo: 1 });
-    expect((await control(ctx, eventId, 'wealth', 'OPEN_GROUP', { groupNo: 1 })).body.error.code).toBe('REASON_REQUIRED');
-    expect((await control(ctx, eventId, 'wealth', 'OPEN_GROUP', { groupNo: 1, reason: '并列第一组织追加' })).status).toBe(200);
+    expect((await control(ctx, eventId, 'wealth', 'OPEN_GROUP', { groupNo: 1 })).status).toBe(200);
     expect((await pdState(eventId, pd)).currentPp).toBe(35);
   });
 });
@@ -467,70 +525,70 @@ describe('A19/A20 标王门槛与并列', () => {
   });
 });
 
-describe('A23 管理员代录', () => {
-  it('同等校验，标明代录来源与原因，不能下调', async () => {
+describe('A23 管理员代录与更正', () => {
+  it('代录与领导同等校验，标明代录来源，不需要填写原因', async () => {
     const { eventId } = await liveEvent();
     const proxy = (body: object) =>
       call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/projects/wealth/units/MH/bids`, { cookie: ctx.adminCookie, body });
     // 底标未确认
-    expect((await proxy({ targetIncreasePp: 10, expectedBidVersion: 0, idempotencyKey: idem(), reason: '断网代录' })).body.error.code).toBe(
-      'BASE_NOT_ACKNOWLEDGED',
-    );
-    // 代记底标确认须注明原因
-    const ackNoReason = await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/projects/wealth/units/MH/base-ack`, {
+    expect((await proxy({ targetIncreasePp: 10, expectedBidVersion: 0, idempotencyKey: idem() })).body.error.code).toBe('BASE_NOT_ACKNOWLEDGED');
+    // 代记底标确认：只需确认，不需要原因
+    const ackOk = await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/projects/wealth/units/MH/base-ack`, {
       cookie: ctx.adminCookie,
       body: { idempotencyKey: idem() },
     });
-    expect(ackNoReason.body.error.code).toBe('REASON_REQUIRED');
-    const ackOk = await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/projects/wealth/units/MH/base-ack`, {
-      cookie: ctx.adminCookie,
-      body: { idempotencyKey: idem(), reason: '领导现场口头确认' },
-    });
     expect(ackOk.body.source).toBe('ADMIN_PROXY');
-    // 必须填写原因
-    expect((await proxy({ targetIncreasePp: 10, expectedBidVersion: 0, idempotencyKey: idem() })).body.error.code).toBe('REASON_REQUIRED');
-    // 不能下调
-    expect((await proxy({ targetIncreasePp: 5, expectedBidVersion: 0, idempotencyKey: idem(), reason: 'x' })).body.error.code).toBe('NOT_GREATER');
-    const ok = await proxy({ targetIncreasePp: 15, expectedBidVersion: 0, idempotencyKey: idem(), reason: '手机没电，领导口头确认' });
+    // 代录接口仍不能下调
+    expect((await proxy({ targetIncreasePp: 5, expectedBidVersion: 0, idempotencyKey: idem() })).body.error.code).toBe('NOT_GREATER');
+    const ok = await proxy({ targetIncreasePp: 15, expectedBidVersion: 0, idempotencyKey: idem() });
     expect(ok.status).toBe(201);
     expect(ok.body.receipt).toMatchObject({ source: 'ADMIN_PROXY', fromPp: 10, toPp: 15, deltaPp: 5 });
-    const rec = await ctx.db.query(`SELECT source, reason, actor_type FROM bid_records WHERE event_id = $1 AND unit_code = 'MH'`, [eventId]);
-    expect(rec.rows[0]).toMatchObject({ source: 'ADMIN_PROXY', reason: '手机没电，领导口头确认', actor_type: 'ADMIN' });
+    const rec = await ctx.db.query(`SELECT source, actor_type FROM bid_records WHERE event_id = $1 AND unit_code = 'MH'`, [eventId]);
+    expect(rec.rows[0]).toMatchObject({ source: 'ADMIN_PROXY', actor_type: 'ADMIN' });
     // 数据库层兜底：直接 UPDATE 下调被拒绝
     await expect(
       ctx.db.query(`UPDATE bid_states SET current_pp = 5 WHERE event_id = $1 AND project_code = 'wealth' AND unit_code = 'MH'`, [eventId]),
     ).rejects.toThrow(/不能下调/);
   });
-});
 
-describe('演示活动隔离', () => {
-  it('演示活动自动填充演示数据并标记；正式活动不能填充演示数据', async () => {
-    const d = await call(ctx.app, 'POST', '/api/v1/admin/events', { cookie: ctx.adminCookie, body: { isDemo: true } });
-    expect(d.status).toBe(201);
-    expect(d.body.event.isDemo).toBe(true);
-    const fr = await call(ctx.app, 'GET', `/api/v1/admin/events/${d.body.event.id}/first-round`, { cookie: ctx.adminCookie });
-    expect(fr.body.projects.wealth.preview.completeCount).toBe(16);
-    const formal = await createFormalEvent(ctx);
-    const seed = await call(ctx.app, 'POST', `/api/v1/admin/events/${formal}/demo/seed`, { cookie: ctx.adminCookie, body: {} });
-    expect(seed.body.error.code).toBe('DEMO_ONLY');
-  });
-});
-
-describe('领导使用卡', () => {
-  it('Wi-Fi 二维码文本按规范转义；配置后随二维码一并返回', async () => {
-    const { wifiQrText } = await import('../src/services/auth');
-    expect(wifiQrText('Meeting-5G', 'pa;ss')).toBe('WIFI:T:WPA;S:Meeting-5G;P:pa\\;ss;;');
-    expect(wifiQrText('Open', '')).toBe('WIFI:T:nopass;S:Open;;');
-    const eventId = await createFormalEvent(ctx);
-    const none = await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/units/PD/credentials`, { cookie: ctx.adminCookie, body: {} });
-    expect(none.body.card).toMatchObject({ eventName: '测试竞标活动', wifi: null });
-    await call(ctx.app, 'PATCH', `/api/v1/admin/events/${eventId}/config`, { cookie: ctx.adminCookie, body: { wifiSsid: 'Meeting-5G', wifiPassword: '12345678' } });
-    const batch = await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/credentials/batch`, { cookie: ctx.adminCookie, body: {} });
-    expect(batch.body.credentials).toHaveLength(16);
-    expect(batch.body.card.wifi).toMatchObject({ ssid: 'Meeting-5G', password: '12345678' });
-    expect(batch.body.card.wifi.qrDataUrl.startsWith('data:image/png;base64,')).toBe(true);
-    // 默认二维码有效期 30 天
-    const days = (Date.parse(batch.body.credentials[0].expiresAt) - Date.now()) / 86400_000;
-    expect(Math.round(days)).toBe(30);
+  it('领导误操作：工作人员可下调更正（不低于首轮，锁定前、含本组结束后），大屏与流水同步', async () => {
+    const { eventId, pd } = await liveEvent();
+    const screen = await joinScreen(ctx, eventId);
+    // 领导误把 30% 加到 80%
+    expect((await bid(ctx, eventId, 'wealth', pd, { targetIncreasePp: 80, expectedBidVersion: 0, confirmHighValue: true })).status).toBe(201);
+    const correct = (body: object) =>
+      call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/projects/wealth/units/PD/correct`, { cookie: ctx.adminCookie, body });
+    // 领导自己不能调用更正接口
+    const leaderTry = await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/projects/wealth/units/PD/correct`, {
+      cookie: pd,
+      body: { targetIncreasePp: 35, expectedBidVersion: 1, idempotencyKey: idem() },
+    });
+    expect(leaderTry.status).toBe(401);
+    // 不能等于或高于当前、不能低于首轮、不能是小数、版本须最新
+    expect((await correct({ targetIncreasePp: 80, expectedBidVersion: 1, idempotencyKey: idem() })).body.error.code).toBe('NOT_LOWER');
+    expect((await correct({ targetIncreasePp: 25, expectedBidVersion: 1, idempotencyKey: idem() })).body.error.code).toBe('NOT_LOWER');
+    expect((await correct({ targetIncreasePp: 35.5, expectedBidVersion: 1, idempotencyKey: idem() })).body.error.code).toBe('INVALID_VALUE');
+    expect((await correct({ targetIncreasePp: 35, expectedBidVersion: 0, idempotencyKey: idem() })).body.error.code).toBe('VERSION_CONFLICT');
+    // 本组已结束、暂停核对时也可以更正
+    await control(ctx, eventId, 'wealth', 'CLOSE_GROUP', { groupNo: 1 });
+    const ok = await correct({ targetIncreasePp: 35, expectedBidVersion: 1, idempotencyKey: idem() });
+    expect(ok.status).toBe(201);
+    expect(ok.body.receipt).toMatchObject({ source: 'ADMIN_CORRECTION', fromPp: 80, toPp: 35, deltaPp: -45, targetWan: '135.00' });
+    expect((await pdState(eventId, pd)).currentPp).toBe(35);
+    const live = await call(ctx.app, 'GET', `/api/v1/screen/events/${eventId}/live`, { cookie: screen });
+    expect(live.body.groups[0].rows.find((r: any) => r.unitCode === 'PD')).toMatchObject({ currentPp: 35, targetWan: '135.00' });
+    expect(live.body.recentBids[0]).toMatchObject({ unitCode: 'PD', fromPp: 80, toPp: 35, source: 'ADMIN_CORRECTION' });
+    const a = await ctx.db.query(`SELECT reason FROM audit_logs WHERE event_id = $1 AND action = 'BID_CORRECTED'`, [eventId]);
+    expect(a.rows[0].reason).toContain('更正');
+    // 更正后领导仍可在本组重新开放后正常追加
+    await control(ctx, eventId, 'wealth', 'OPEN_GROUP', { groupNo: 1 });
+    expect((await bid(ctx, eventId, 'wealth', pd, { targetIncreasePp: 36, expectedBidVersion: 2 })).status).toBe(201);
+    // 锁定后不能更正
+    await control(ctx, eventId, 'wealth', 'PAUSE');
+    await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true, ...EARLY_LOCK });
+    expect((await correct({ targetIncreasePp: 31, expectedBidVersion: 3, idempotencyKey: idem() })).body.error.code).toBe('PROJECT_LOCKED');
+    // 导出流水标注更正
+    const rec = await ctx.db.query(`SELECT source, from_pp, to_pp, delta_pp FROM bid_records WHERE event_id = $1 AND unit_code = 'PD' ORDER BY event_sequence`, [eventId]);
+    expect(rec.rows.map((r: any) => r.source)).toEqual(['LEADER', 'ADMIN_CORRECTION', 'LEADER']);
   });
 });

@@ -75,7 +75,7 @@ test('领导在（模拟）金山文档中只填一个格子：加码生效（�
   const screenCtx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   const screen = await screenCtx.newPage();
   await screen.goto((key.screenUrl as string).replace(/^https?:\/\/[^/]+/, baseURL!).replace('/screen#', '/screen/live#'));
-  const pdCurrent = screen.locator('.s-row', { hasText: '浦东' }).locator('.s-current');
+  const pdCurrent = screen.locator('.s-prow', { hasText: '浦东' }).locator('.s-current');
   await expect(pdCurrent).toContainText('30');
 
   // 浦东领导：手机打开本单位文件

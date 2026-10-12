@@ -1,7 +1,8 @@
 /**
  * 身份与会话：
  * - 管理员：账号密码登录（密码 scrypt 哈希，不硬编码）。
- * - 领导：管理员发放的专属二维码含一次性交换凭证，交换后得到仅绑定本活动、本单位的会话；默认一个单位一个有效会话。
+ * - 领导：管理员发放的专属二维码（有效期内可重复扫码），交换后得到仅绑定本活动、本单位的会话；
+ *   同一时间只有一部手机在线：新手机扫码登录后，旧手机自动下线；工作人员也可强制下线。
  * - 大屏：独立只读凭证，可多块屏共用，可撤销。
  * 数据库只保存凭证与会话的哈希。
  */
@@ -178,7 +179,7 @@ export interface IssuedCredential {
   expiresAt: string;
 }
 
-/** 为单位（重新）发放二维码：作废该单位此前未使用的凭证；可选同时撤销现有会话 */
+/** 为单位（重新）发放二维码：作废该单位此前的全部二维码；可选同时让已登录的手机下线 */
 export async function issueUnitCredential(
   ctx: AppContext,
   eventId: string,
@@ -193,7 +194,7 @@ export async function issueUnitCredential(
     const cfg = readConfig(ev);
     const expiresAt = new Date(Date.now() + cfg.qrValidHours * 3600_000);
     await tx.query(
-      `UPDATE unit_credentials SET revoked_at = now() WHERE event_id = $1 AND unit_code = $2 AND used_at IS NULL AND revoked_at IS NULL`,
+      `UPDATE unit_credentials SET revoked_at = now() WHERE event_id = $1 AND unit_code = $2 AND revoked_at IS NULL`,
       [eventId, unitCode],
     );
     if (opts.revokeSessions) {
@@ -225,6 +226,22 @@ export async function issueUnitCredential(
   } satisfies IssuedCredential;
 }
 
+/** 强制下线：让该单位当前登录的手机下线；二维码继续有效，领导可用任一手机重新扫码 */
+export async function kickUnitSessions(ctx: AppContext, eventId: string, actor: Actor, unitCode: string) {
+  if (!UNIT_BY_CODE.has(unitCode)) throw bizError('NOT_FOUND', '单位不存在');
+  return runWrite(ctx, eventId, actor, { operation: 'KICK_UNIT' }, async (tx) => {
+    const s = await tx.query(
+      `UPDATE sessions SET revoked_at = now(), revoke_reason = '工作人员强制下线'
+        WHERE event_id = $1 AND unit_code = $2 AND role = 'BIDDER' AND revoked_at IS NULL`,
+      [eventId, unitCode],
+    );
+    const seq = await emit(tx, eventId, { type: 'SESSION_CHANGED', audience: 'ADMIN', unitCode, data: { action: 'KICKED' } });
+    await audit(tx, eventId, actor, 'UNIT_KICKED', { unitCode, details: { sessions: s.rowCount }, eventSequence: seq });
+    return { body: { kickedSessions: s.rowCount ?? 0 } };
+  });
+}
+
+/** 作废：让该单位的手机下线，且该单位的二维码全部作废（须重新发放） */
 export async function revokeUnitSessions(ctx: AppContext, eventId: string, actor: Actor, unitCode: string, reason: string) {
   if (!UNIT_BY_CODE.has(unitCode)) throw bizError('NOT_FOUND', '单位不存在');
   return runWrite(ctx, eventId, actor, { operation: 'REVOKE_UNIT' }, async (tx) => {
@@ -234,7 +251,7 @@ export async function revokeUnitSessions(ctx: AppContext, eventId: string, actor
       [eventId, unitCode, reason || '管理员撤销'],
     );
     const c = await tx.query(
-      `UPDATE unit_credentials SET revoked_at = now() WHERE event_id = $1 AND unit_code = $2 AND used_at IS NULL AND revoked_at IS NULL`,
+      `UPDATE unit_credentials SET revoked_at = now() WHERE event_id = $1 AND unit_code = $2 AND revoked_at IS NULL`,
       [eventId, unitCode],
     );
     const seq = await emit(tx, eventId, { type: 'SESSION_CHANGED', audience: 'ADMIN', unitCode, data: { action: 'REVOKED' } });
@@ -248,7 +265,7 @@ export async function revokeUnitSessions(ctx: AppContext, eventId: string, actor
   });
 }
 
-/** 领导扫码：一次性凭证换取单位会话 */
+/** 领导扫码：凭证换取单位会话。有效期内可重复扫码（换手机不必重新发放），新登录会让本单位其他手机下线 */
 export async function exchangeUnitCredential(ctx: AppContext, token: unknown, userAgent?: string) {
   if (typeof token !== 'string' || token.length < 20 || token.length > 200) throw bizError('CREDENTIAL_INVALID');
   if (ctx.config.readOnly) throw bizError('READ_ONLY');
@@ -264,9 +281,6 @@ export async function exchangeUnitCredential(ctx: AppContext, token: unknown, us
     if (!cred) throw bizError('CREDENTIAL_INVALID');
     // 凭证持有者已知是哪家单位，告知单位名称与原因，便于现场处理
     const unitName = UNIT_BY_CODE.get(cred.unit_code)?.name ?? cred.unit_code;
-    if (cred.used_at) {
-      throw bizError('CREDENTIAL_INVALID', `${unitName}的二维码已在一部手机上使用过。如需换手机，请联系工作人员点「换手机」后重新扫码。`, { unitName, reason: 'USED' });
-    }
     if (cred.revoked_at) {
       throw bizError('CREDENTIAL_INVALID', `${unitName}的这张二维码已作废（工作人员已重新发放），请扫描最新的二维码。`, { unitName, reason: 'REVOKED' });
     }
@@ -274,10 +288,10 @@ export async function exchangeUnitCredential(ctx: AppContext, token: unknown, us
       throw bizError('CREDENTIAL_INVALID', `${unitName}的二维码已过期，请联系工作人员重新发放。`, { unitName, reason: 'EXPIRED' });
     }
     const cfg = readConfig(ev.rows[0]);
-    await client.query('UPDATE unit_credentials SET used_at = now() WHERE id = $1', [cred.id]);
-    // 默认一个单位一个有效会话
-    await client.query(
-      `UPDATE sessions SET revoked_at = now(), revoke_reason = '同单位新会话登录'
+    await client.query('UPDATE unit_credentials SET used_at = COALESCE(used_at, now()) WHERE id = $1', [cred.id]);
+    // 同一时间只有一部手机在线：新手机登录，其他手机自动下线
+    const replaced = await client.query(
+      `UPDATE sessions SET revoked_at = now(), revoke_reason = '本单位已在另一部手机登录'
         WHERE event_id = $1 AND unit_code = $2 AND role = 'BIDDER' AND revoked_at IS NULL`,
       [cred.event_id, cred.unit_code],
     );
@@ -292,7 +306,11 @@ export async function exchangeUnitCredential(ctx: AppContext, token: unknown, us
     });
     const actor: Actor = { type: 'LEADER', id: cred.unit_code, name: `${UNIT_BY_CODE.get(cred.unit_code)?.name}领导`, unitCode: cred.unit_code };
     const seq = await emit(client, cred.event_id, { type: 'SESSION_CHANGED', audience: 'ADMIN', unitCode: cred.unit_code, data: { action: 'JOINED' } });
-    await audit(client, cred.event_id, actor, 'UNIT_JOINED', { unitCode: cred.unit_code, eventSequence: seq });
+    await audit(client, cred.event_id, actor, 'UNIT_JOINED', {
+      unitCode: cred.unit_code,
+      details: { replacedSessions: replaced.rowCount ?? 0 },
+      eventSequence: seq,
+    });
     await client.query('COMMIT');
     return { token: s.token, expiresAt, eventId: cred.event_id as string, unitCode: cred.unit_code as string };
   } catch (e) {
@@ -366,9 +384,10 @@ export async function unitAccessStatus(q: Queryable, eventId: string) {
     const s = sesMap.get(u.code);
     let credentialStatus: 'NONE' | 'ISSUED' | 'USED' | 'EXPIRED' | 'REVOKED' = 'NONE';
     if (c) {
-      if (c.used_at) credentialStatus = 'USED';
-      else if (c.revoked_at) credentialStatus = 'REVOKED';
+      // 二维码可重复扫码：作废、过期优先于「已扫码」
+      if (c.revoked_at) credentialStatus = 'REVOKED';
       else if (new Date(c.expires_at).getTime() <= Date.now()) credentialStatus = 'EXPIRED';
+      else if (c.used_at) credentialStatus = 'USED';
       else credentialStatus = 'ISSUED';
     }
     return {

@@ -670,7 +670,7 @@ describe('审查报告修复（F01–F05）', () => {
     expect(n.rows[0].n).toBe(0);
   });
 
-  it('F02：有单位没读到时，结束本组被拦截；填写原因可强制执行并记入审计', async () => {
+  it('F02：有单位没读到时，结束本组被拦截；核对后确认可强制执行并记入审计', async () => {
     const { eventId, fileId } = await prepared({ live: true });
     const sheet = pdSheet(fileId);
     sheet.Name = '浦东（改名）';
@@ -680,13 +680,12 @@ describe('审查报告修复（F01–F05）', () => {
       expect(r.body.error.code).toBe('KDOCS_INCOMPLETE');
       expect(r.body.error.message).toContain('浦东');
       expect(r.body.error.details.units).toEqual(['浦东']);
-      const noReason = await control(ctx, eventId, 'wealth', 'CLOSE_GROUP', { groupNo: 1, kdocsForce: true });
-      expect(noReason.body.error.code).toBe('REASON_REQUIRED');
-      const forced = await control(ctx, eventId, 'wealth', 'CLOSE_GROUP', { groupNo: 1, kdocsForce: true, kdocsForceReason: '浦东电话确认无新报价' });
+      // 核对后确认即可强制执行，不需要填写原因
+      const forced = await control(ctx, eventId, 'wealth', 'CLOSE_GROUP', { groupNo: 1, kdocsForce: true });
       expect(forced.status).toBe(200);
       expect(forced.body.kdocsWarning).toContain('浦东');
       const a = await ctx.db.query(`SELECT reason, details FROM audit_logs WHERE event_id = $1 AND action = 'KDOCS_FORCE'`, [eventId]);
-      expect(a.rows[0].reason).toBe('浦东电话确认无新报价');
+      expect(a.rows[0].reason).toBe('工作人员核对后确认继续');
       expect(a.rows[0].details.units).toEqual(['浦东']);
     } finally {
       sheet.Name = '浦东';

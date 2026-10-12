@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, errorText, takeHashParam } from '../lib/api';
 
-/** 扫码入口：一次性凭证换取单位会话，成功后从地址栏移除凭证并进入竞标页 */
+/** 扫码入口：凭证换取单位会话（新手机登录会让旧手机下线），成功后从地址栏移除凭证并进入竞标页 */
 export function JoinPage() {
   const nav = useNavigate();
   const [msg, setMsg] = useState('正在验证二维码…');

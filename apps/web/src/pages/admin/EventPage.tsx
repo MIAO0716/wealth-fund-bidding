@@ -143,67 +143,55 @@ function SetupTab({ eventId, state, reload }: TabProps) {
         <div className="form-grid">
           <label className="field">
             <span>活动名称</span>
-            <input value={cfg.name} onChange={(e) => set('name', e.target.value)} />
+            <input value={cfg.name} onChange={(e) => set('name', e.target.value)} placeholder="例如：2027年一季度财富管理类业务竞标" />
           </label>
           <label className="field">
-            <span>年度</span>
-            <input type="number" value={cfg.year ?? ''} onChange={(e) => set('year', e.target.value ? Number(e.target.value) : null)} />
-          </label>
-          <label className="field">
-            <span>活动日期（会话有效期覆盖当天）</span>
+            <span>活动日期</span>
             <input type="date" value={cfg.eventDate ?? ''} onChange={(e) => set('eventDate', e.target.value || null)} />
           </label>
-          <label className="field">
-            <span>业务指标名称</span>
-            <input value={cfg.metricName} onChange={(e) => set('metricName', e.target.value)} placeholder="由组织者填写" />
-          </label>
-          <label className="field">
-            <span>金额统计口径（如销量或AUM净增，系统不会自行等同）</span>
-            <input value={cfg.amountBasis} onChange={(e) => set('amountBasis', e.target.value)} />
-          </label>
-          <label className="field">
-            <span>统计周期</span>
-            <input value={cfg.statPeriod} onChange={(e) => set('statPeriod', e.target.value)} />
-          </label>
-          <label className="field" style={{ gridColumn: '1 / -1' }}>
-            <span>数据来源说明</span>
-            <input value={cfg.dataSource} onChange={(e) => set('dataSource', e.target.value)} />
-          </label>
-          <label className="field">
-            <span>二维码有效期（小时，默认 720 = 30 天）</span>
-            <input type="number" min={1} value={cfg.qrValidHours} onChange={(e) => set('qrValidHours', Number(e.target.value))} />
-          </label>
-          <label className="field">
-            <span>大增幅再次确认阈值（%，不是上限）</span>
-            <input type="number" min={5} step={5} value={cfg.highValueConfirmPp} onChange={(e) => set('highValueConfirmPp', Number(e.target.value))} />
-          </label>
-          <div className="field">
-            <span>手机快捷档位（百分点）</span>
-            <div className="a-row">
-              {[1, 2, 3, 5, 10, 15, 20].map((s) => (
-                <label key={s} className="a-row" style={{ gap: 4 }}>
-                  <input type="checkbox" checked={cfg.allowedIncrementSteps.includes(s)} onChange={() => toggleStep(s)} />+{s}
-                </label>
-              ))}
-            </div>
-            <span className="small">每次加码为 1 的整数倍、组内自由加码：领导可以任意填写整数，这里只决定手机上显示哪几个快捷按钮。</span>
-          </div>
-          <label className="field">
-            <span>会场 Wi-Fi 名称（选填，印在领导使用卡上，手机相机扫码即可连接）</span>
-            <input value={cfg.wifiSsid} onChange={(e) => set('wifiSsid', e.target.value)} placeholder="例如：Meeting-5G" />
-          </label>
-          <label className="field">
-            <span>会场 Wi-Fi 密码（开放网络留空）</span>
-            <input value={cfg.wifiPassword} onChange={(e) => set('wifiPassword', e.target.value)} />
-          </label>
-          <label className="field">
-            <span>首轮大屏展示底标与目标金额</span>
-            <select value={cfg.showAmountsOnScreen ? '1' : '0'} onChange={(e) => set('showAmountsOnScreen', e.target.value === '1')}>
-              <option value="0">不展示（默认，以增幅为主）</option>
-              <option value="1">展示</option>
-            </select>
-          </label>
         </div>
+        <p className="small muted" style={{ marginTop: 8 }}>
+          只需填写这两项。目标金额按「基础底标 ×（1 + 增幅）」自动计算，大屏默认展示。
+        </p>
+        <details className="a-details">
+          <summary>其他设置（一般不用改）</summary>
+          <div className="form-grid" style={{ marginTop: 10 }}>
+            <label className="field">
+              <span>二维码有效期（小时，默认 720 = 30 天）</span>
+              <input type="number" min={1} value={cfg.qrValidHours} onChange={(e) => set('qrValidHours', Number(e.target.value))} />
+            </label>
+            <label className="field">
+              <span>大增幅再次确认阈值（%，不是上限）</span>
+              <input type="number" min={5} step={5} value={cfg.highValueConfirmPp} onChange={(e) => set('highValueConfirmPp', Number(e.target.value))} />
+            </label>
+            <div className="field">
+              <span>手机快捷档位（百分点）</span>
+              <div className="a-row">
+                {[1, 2, 3, 5, 10, 15, 20].map((s) => (
+                  <label key={s} className="a-row" style={{ gap: 4 }}>
+                    <input type="checkbox" checked={cfg.allowedIncrementSteps.includes(s)} onChange={() => toggleStep(s)} />+{s}
+                  </label>
+                ))}
+              </div>
+              <span className="small">每次加码为 1 的整数倍、组内自由加码：领导可以任意填写整数，这里只决定手机上显示哪几个快捷按钮。</span>
+            </div>
+            <label className="field">
+              <span>大屏展示底标与目标金额</span>
+              <select value={cfg.showAmountsOnScreen ? '1' : '0'} onChange={(e) => set('showAmountsOnScreen', e.target.value === '1')}>
+                <option value="1">展示（默认）</option>
+                <option value="0">不展示，只显示增幅</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>会场 Wi-Fi 名称（局域网版用，印在领导使用卡上；在线版留空）</span>
+              <input value={cfg.wifiSsid} onChange={(e) => set('wifiSsid', e.target.value)} placeholder="例如：Meeting-5G" />
+            </label>
+            <label className="field">
+              <span>会场 Wi-Fi 密码（开放网络留空）</span>
+              <input value={cfg.wifiPassword} onChange={(e) => set('wifiPassword', e.target.value)} />
+            </label>
+          </div>
+        </details>
         <div className="a-row" style={{ marginTop: 16 }}>
           <button className="btn btn-primary" onClick={() => void save()} disabled={busy}>
             保存配置
@@ -236,7 +224,7 @@ function SetupTab({ eventId, state, reload }: TabProps) {
             {readiness.unitsWithoutCredential.length > 0 && (
               <p className="small muted">尚未发放二维码：{readiness.unitsWithoutCredential.length} 家</p>
             )}
-            <p className="small muted">流程：导入首轮 → 发布理财首轮 → 领导认领底标 → 分组加码 → 暂停核对 → 锁定理财 → 基金同样流程 → 导出。</p>
+            <p className="small muted">流程：会前上传理财与基金首轮并一起冻结 → 发放二维码、领导认领底标 → 现场理财分组加码 → 锁定理财 → 基金同样流程 → 导出。</p>
           </>
         )}
       </div>

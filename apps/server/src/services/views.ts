@@ -167,7 +167,8 @@ export async function screenLive(tx: Tx, eventId: string, projectCodeOpt?: Proje
     event: publicEvent(ev),
     project,
     published,
-    groups: published ? buildBoards(project, states, false) : [],
+    // 目标金额按「底标 ×（1 + 当前增幅）」实时计算（可在配置中关闭）
+    groups: published ? buildBoards(project, states, readConfig(evRow).showAmountsOnScreen) : [],
     recentBids: published ? await recentBids(tx, eventId, projectCode, 5) : [],
   };
 }
