@@ -28,6 +28,7 @@ export const ERROR_MESSAGES = {
   REASON_REQUIRED: '请填写原因',
   CONFIRM_REQUIRED: '重大操作需要二次确认',
   DEMO_ONLY: '仅演示活动允许该操作',
+  GROUPS_NOT_FINISHED: '尚有分组未结束：正常锁定要求各组都已结束；确需提前收场，请单独确认并填写原因',
   KDOCS_INCOMPLETE: '金山表格没有全部读取成功，请核对后再操作',
   BAD_REQUEST: '请求格式不正确',
   READ_ONLY: '系统处于只读维护状态，暂停写入',

@@ -213,6 +213,8 @@ export interface ControlInput {
   groupNo?: unknown;
   reason?: unknown;
   confirm?: unknown;
+  /** 提前收场：有分组未结束时锁定，须同时填写原因 */
+  earlyLock?: unknown;
   expectedControlVersion?: unknown;
   idempotencyKey?: unknown;
 }
@@ -256,7 +258,7 @@ export async function controlProject(ctx: AppContext, eventId: string, actor: Ac
         case 'CLOSE_GROUP':
           return { body: await closeGroup(tx, eventId, actor, project, groups, groupNo as GroupNo | null) };
         case 'LOCK':
-          return { body: await lock(tx, eventId, actor, project) };
+          return { body: await lock(tx, eventId, actor, project, groups, { early: input.earlyLock === true, reason }) };
       }
     },
   );
@@ -410,6 +412,7 @@ export function computeResults(states: StateRow[]) {
 }
 
 export async function lockPreview(tx: Tx, eventId: string, projectCode: ProjectCode) {
+  const unfinished = unfinishedGroups(await loadGroups(tx, eventId, projectCode));
   const s = await tx.query<StateRow>(
     'SELECT unit_code, base_target_fen, first_round_pp, current_pp, version FROM bid_states WHERE event_id = $1 AND project_code = $2',
     [eventId, projectCode],
@@ -417,6 +420,7 @@ export async function lockPreview(tx: Tx, eventId: string, projectCode: ProjectC
   const { groups, tieWarnings } = computeResults(s.rows);
   return {
     tieWarnings,
+    unfinishedGroups: unfinished,
     groups: groups.map((g) => ({
       groupNo: g.groupNo,
       leaderStatus: g.ranking.leaderStatus,
@@ -426,9 +430,25 @@ export async function lockPreview(tx: Tx, eventId: string, projectCode: ProjectC
   };
 }
 
-async function lock(tx: Tx, eventId: string, actor: Actor, project: ProjectRow) {
+/** 尚未结束的分组（锁定前核对用） */
+export function unfinishedGroups(groups: GroupRow[]) {
+  return groups
+    .filter((g) => g.status !== 'CLOSED')
+    .map((g) => ({ groupNo: g.group_no, name: GROUP_BY_NO.get(g.group_no)!.name, status: g.status, statusText: g.status === 'OPEN' ? '进行中' : '未开始' }));
+}
+
+async function lock(tx: Tx, eventId: string, actor: Actor, project: ProjectRow, groupRows: GroupRow[], opts: { early: boolean; reason: string }) {
   if (project.status === 'LOCKED') throw bizError('PROJECT_LOCKED', '项目已锁定');
   if (project.status !== 'PAUSED') throw bizError('INVALID_STATE', '锁定前请先暂停竞标，核对后再锁定');
+  // 正常锁定要求各组都已结束；提前收场须单独确认并填写原因，单独记入审计
+  const unfinished = unfinishedGroups(groupRows);
+  if (unfinished.length) {
+    const names = unfinished.map((g) => `${g.name}（${g.statusText}）`).join('、');
+    if (!opts.early) {
+      throw bizError('GROUPS_NOT_FINISHED', `${names}尚未结束。正常锁定要求各组都已结束；确需提前收场，请勾选「提前收场」并填写原因`, { groups: unfinished });
+    }
+    if (!opts.reason) throw bizError('REASON_REQUIRED', `提前收场须填写原因（未结束：${names}）`);
+  }
   const states = await tx.query<StateRow>(
     'SELECT unit_code, base_target_fen, first_round_pp, current_pp, version FROM bid_states WHERE event_id = $1 AND project_code = $2',
     [eventId, project.project_code],
@@ -441,6 +461,13 @@ async function lock(tx: Tx, eventId: string, actor: Actor, project: ProjectRow) 
     [eventId, project.project_code],
   );
   const updated = await bumpControl(tx, eventId, project.project_code, `status = 'LOCKED', locked_at = $3`, [now]);
+  if (unfinished.length) {
+    await audit(tx, eventId, actor, 'PROJECT_LOCKED_EARLY', {
+      projectCode: project.project_code,
+      reason: opts.reason,
+      details: { unfinishedGroups: unfinished },
+    });
+  }
   const seq = await emit(tx, eventId, {
     type: 'PROJECT_LOCKED',
     audience: 'PUBLIC',

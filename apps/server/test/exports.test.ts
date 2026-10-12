@@ -1,7 +1,7 @@
 import ExcelJS from 'exceljs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { safeText } from '../src/services/exports';
-import {
+import { EARLY_LOCK,
   type Ctx,
   ack,
   bid,
@@ -37,7 +37,7 @@ async function lockAll(eventId: string, project: 'wealth' | 'fund') {
     }
     await control(ctx, eventId, project, 'CLOSE_GROUP', { groupNo: g });
   }
-  const r = await control(ctx, eventId, project, 'LOCK', { confirm: true });
+  const r = await control(ctx, eventId, project, 'LOCK', { confirm: true, ...EARLY_LOCK });
   expect(r.status).toBe(200);
 }
 

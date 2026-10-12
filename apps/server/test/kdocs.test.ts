@@ -3,7 +3,7 @@ import ExcelJS from 'exceljs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { KdocsError, callScript, normalizeWebhookUrl } from '../src/services/kdocs/client';
 import { MockWorkbook, runAirScript } from '../src/services/kdocs/mock';
-import { type Ctx, FULL_CONFIG as FULL, call, control, createFormalEvent, fullRows, goLive, importRows, publish, setup } from './helpers';
+import { EARLY_LOCK, type Ctx, FULL_CONFIG as FULL, call, control, createFormalEvent, fullRows, goLive, importRows, publish, setup } from './helpers';
 
 let ctx: Ctx;
 beforeAll(async () => {
@@ -381,7 +381,7 @@ describe('通过金山文档竞标', () => {
     await syncNow(eventId);
     await control(ctx, eventId, 'wealth', 'CLOSE_GROUP', { groupNo: 1 });
     await control(ctx, eventId, 'wealth', 'PAUSE');
-    expect((await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true })).status).toBe(200);
+    expect((await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true, ...EARLY_LOCK })).status).toBe(200);
     await goLive(ctx, eventId, 'fund', 1);
     await syncNow(eventId);
     expect(String(cell(fileId, '浦东', 'B2'))).toContain('基金 · ');
@@ -611,12 +611,12 @@ describe('按需同步（减少金山文档调用次数）', () => {
     expect(delay(st)).toBeGreaterThanOrEqual(9);
 
     await control(ctx, eventId, 'wealth', 'PAUSE');
-    await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true });
+    await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true, ...EARLY_LOCK });
     await importRows(ctx, eventId, fullRows('fund', { base: () => '200' }));
     await goLive(ctx, eventId, 'fund', 1);
     await waitPace('HOT');
     await control(ctx, eventId, 'fund', 'PAUSE');
-    await control(ctx, eventId, 'fund', 'LOCK', { confirm: true });
+    await control(ctx, eventId, 'fund', 'LOCK', { confirm: true, ...EARLY_LOCK });
     st = await waitPace('IDLE');
     expect(st.nextSyncAt).toBeNull();
     // 停止自动同步后，「立即同步」仍可用

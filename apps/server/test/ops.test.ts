@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app';
-import { type Ctx, call, control, createFormalEvent, fullRows, importRows, publish, setup, testConfig } from './helpers';
+import { EARLY_LOCK, type Ctx, call, control, createFormalEvent, fullRows, importRows, publish, setup, testConfig } from './helpers';
 
 const backupDir = mkdtempSync(join(tmpdir(), 'bid-backup-'));
 let ctx: Ctx;
@@ -30,7 +30,7 @@ describe('自动检查点', () => {
     await waitFor(() => readdirSync(backupDir).some((f) => f.includes('round1-published')));
     await control(ctx, eventId, 'wealth', 'START');
     await control(ctx, eventId, 'wealth', 'PAUSE');
-    await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true });
+    await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true, ...EARLY_LOCK });
     await waitFor(() => readdirSync(backupDir).some((f) => f.includes('locked')));
     await waitFor(async () => (await ctx.db.query(`SELECT count(*)::int AS n FROM maintenance_log WHERE action = 'CHECKPOINT'`)).rows[0].n >= 2);
     const m = await call(ctx.app, 'GET', '/api/v1/admin/maintenance', { cookie: ctx.adminCookie });

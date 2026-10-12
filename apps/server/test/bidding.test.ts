@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import {
+import { EARLY_LOCK,
   type Ctx,
   ack,
   bid,
@@ -192,7 +192,7 @@ describe('A14 成功但响应丢失，随后项目锁定', () => {
     const key = idem('lost');
     await bid(ctx, eventId, 'wealth', pd, { targetIncreasePp: 35, expectedBidVersion: 0, idempotencyKey: key });
     expect((await control(ctx, eventId, 'wealth', 'PAUSE')).status).toBe(200);
-    expect((await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true })).status).toBe(200);
+    expect((await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true, ...EARLY_LOCK })).status).toBe(200);
     const q = await call(ctx.app, 'GET', `/api/v1/bidder/events/${eventId}/requests/${key}`, { cookie: pd });
     expect(q.body).toMatchObject({ found: true, status: 'SUCCEEDED' });
     expect(q.body.response.toPp).toBe(35);
@@ -224,7 +224,7 @@ describe('A15 锁定与加码并发', () => {
         });
         return call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/projects/wealth/control`, {
           cookie: ctx.adminCookie,
-          body: { action: 'LOCK', confirm: true, expectedControlVersion: p.body.controlVersion, idempotencyKey: idem() },
+          body: { action: 'LOCK', confirm: true, ...EARLY_LOCK, expectedControlVersion: p.body.controlVersion, idempotencyKey: idem() },
         });
       })();
       const bidP = bid(ctx, eventId, 'wealth', pd, { targetIncreasePp: 35, expectedBidVersion: 0 });
@@ -356,6 +356,7 @@ describe('A18 理财未锁定时开启基金', () => {
     }
     // 结束最后一组自动暂停
     expect((await getState(ctx, eventId)).projects.wealth.status).toBe('PAUSED');
+    // 三组都已结束：正常锁定，不需要提前收场
     expect((await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true })).status).toBe(200);
     const pub = await publish(ctx, eventId, 'fund');
     expect(pub.status).toBe(200);
@@ -369,11 +370,32 @@ describe('A18 理财未锁定时开启基金', () => {
 
   it('非法状态转换被拒绝：锁定须先暂停；锁定后不可恢复', async () => {
     const { eventId } = await liveEvent();
-    expect((await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true })).body.error.code).toBe('INVALID_STATE');
+    expect((await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true, ...EARLY_LOCK })).body.error.code).toBe('INVALID_STATE');
     expect((await control(ctx, eventId, 'wealth', 'LOCK')).body.error.code).toBe('CONFIRM_REQUIRED');
     await control(ctx, eventId, 'wealth', 'PAUSE');
-    await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true });
+    await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true, ...EARLY_LOCK });
     expect((await control(ctx, eventId, 'wealth', 'RESUME')).body.error.code).toBe('PROJECT_LOCKED');
+  });
+
+  it('提前收场：有分组未结束时正常锁定被拒绝；单独确认并填写原因后可锁定，记入审计', async () => {
+    const { eventId } = await liveEvent();
+    await control(ctx, eventId, 'wealth', 'CLOSE_GROUP', { groupNo: 1 });
+    await control(ctx, eventId, 'wealth', 'PAUSE');
+    const pv = await call(ctx.app, 'GET', `/api/v1/admin/events/${eventId}/projects/wealth/lock-preview`, { cookie: ctx.adminCookie });
+    expect(pv.body.unfinishedGroups.map((g: any) => [g.groupNo, g.statusText])).toEqual([
+      [2, '未开始'],
+      [3, '未开始'],
+    ]);
+    const normal = await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true });
+    expect(normal.body.error.code).toBe('GROUPS_NOT_FINISHED');
+    expect(normal.body.error.message).toContain('第二组（未开始）、第三组（未开始）');
+    const noReason = await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true, earlyLock: true });
+    expect(noReason.body.error.code).toBe('REASON_REQUIRED');
+    const ok = await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true, earlyLock: true, reason: '时间不足，主持人宣布提前收场' });
+    expect(ok.status).toBe(200);
+    const a = await ctx.db.query(`SELECT reason, details FROM audit_logs WHERE event_id = $1 AND action = 'PROJECT_LOCKED_EARLY'`, [eventId]);
+    expect(a.rows[0].reason).toBe('时间不足，主持人宣布提前收场');
+    expect(a.rows[0].details.unfinishedGroups.map((g: any) => g.groupNo)).toEqual([2, 3]);
   });
 
   it('控制版本过期被拒绝', async () => {
@@ -424,7 +446,7 @@ describe('A19/A20 标王门槛与并列', () => {
     const preview = await call(ctx.app, 'GET', `/api/v1/admin/events/${eventId}/projects/wealth/lock-preview`, { cookie: ctx.adminCookie });
     expect(preview.body.tieWarnings[0].message).toContain('授旗规则未确认');
     await control(ctx, eventId, 'wealth', 'PAUSE');
-    const lock = await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true });
+    const lock = await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true, ...EARLY_LOCK });
     expect(lock.body.tieWarnings).toHaveLength(1);
     const screen = await joinScreen(ctx, eventId);
     const res = await call(ctx.app, 'GET', `/api/v1/screen/events/${eventId}/results`, { cookie: screen });
@@ -438,7 +460,7 @@ describe('A19/A20 标王门槛与并列', () => {
     const eventId = await groupWith({ PD: 30 });
     await control(ctx, eventId, 'wealth', 'START');
     await control(ctx, eventId, 'wealth', 'PAUSE');
-    await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true });
+    await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true, ...EARLY_LOCK });
     const st = await call(ctx.app, 'GET', `/api/v1/admin/events/${eventId}/state`, { cookie: ctx.adminCookie });
     expect(st.body.projects.wealth.status).toBe('LOCKED');
     const screen = await joinScreen(ctx, eventId);

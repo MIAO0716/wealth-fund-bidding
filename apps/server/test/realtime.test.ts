@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app';
 import { createAdmin } from '../src/services/auth';
-import {
+import { EARLY_LOCK,
   type Ctx,
   ack,
   bid,
@@ -281,7 +281,7 @@ describe('A22 服务重启', () => {
     const { eventId, pd } = await prepared();
     const r = await bid(ctx, eventId, 'wealth', pd, { targetIncreasePp: 35, expectedBidVersion: 0, idempotencyKey: 'restart-key-001' });
     await control(ctx, eventId, 'wealth', 'PAUSE');
-    await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true });
+    await control(ctx, eventId, 'wealth', 'LOCK', { confirm: true, ...EARLY_LOCK });
     const before = await getState(ctx, eventId);
 
     // 新进程（同一数据库，不重置）

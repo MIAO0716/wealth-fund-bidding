@@ -142,6 +142,9 @@ export async function publish(ctx: Ctx, eventId: string, projectCode: ProjectCod
   });
 }
 
+/** 测试中提前收场的锁定（未结束全部分组）：须单独确认并填写原因 */
+export const EARLY_LOCK = { earlyLock: true, reason: '测试：提前收场' };
+
 export async function control(
   ctx: Ctx,
   eventId: string,

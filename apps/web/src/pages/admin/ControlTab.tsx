@@ -312,8 +312,8 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
           base={base}
           project={project}
           onClose={() => setLockOpen(false)}
-          onLock={async () => {
-            await control('LOCK', { confirm: true });
+          onLock={async (extra) => {
+            await control('LOCK', { confirm: true, ...extra });
             setLockOpen(false);
           }}
         />
@@ -379,9 +379,20 @@ function ReasonModal({ title, run, onClose }: { title: string; run: (reason: str
   );
 }
 
-function LockModal({ base, project, onClose, onLock }: { base: string; project: ProjectCode; onClose: () => void; onLock: () => Promise<void> }) {
-  const [preview, setPreview] = useState<{ tieWarnings: Array<{ message: string }> } | null>(null);
+function LockModal(props: {
+  base: string;
+  project: ProjectCode;
+  onClose: () => void;
+  onLock: (extra: { earlyLock?: boolean; reason?: string }) => Promise<void>;
+}) {
+  const { base, project, onClose, onLock } = props;
+  const [preview, setPreview] = useState<{
+    tieWarnings: Array<{ message: string }>;
+    unfinishedGroups: Array<{ groupNo: number; name: string; statusText: string }>;
+  } | null>(null);
   const [checked, setChecked] = useState(false);
+  const [early, setEarly] = useState(false);
+  const [earlyReason, setEarlyReason] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -391,6 +402,8 @@ function LockModal({ base, project, onClose, onLock }: { base: string; project: 
       .catch((e) => setErr(errorText(e)));
   }, [base, project]);
   const name = project === 'wealth' ? '理财' : '基金';
+  const unfinished = preview?.unfinishedGroups ?? [];
+  const earlyOk = !unfinished.length || (early && earlyReason.trim() !== '');
   return (
     <Modal
       title={`锁定${name}（重大操作，不可退回）`}
@@ -402,11 +415,11 @@ function LockModal({ base, project, onClose, onLock }: { base: string; project: 
           </button>
           <button
             className="btn btn-primary"
-            disabled={!checked || busy || !preview}
+            disabled={!checked || busy || !preview || !earlyOk}
             onClick={async () => {
               setBusy(true);
               try {
-                await onLock();
+                await onLock(unfinished.length ? { earlyLock: true, reason: earlyReason.trim() } : {});
               } catch (e) {
                 setErr(errorText(e));
               } finally {
@@ -414,7 +427,7 @@ function LockModal({ base, project, onClose, onLock }: { base: string; project: 
               }
             }}
           >
-            确认锁定
+            {unfinished.length ? '确认提前收场并锁定' : '确认锁定'}
           </button>
         </>
       }
@@ -429,6 +442,28 @@ function LockModal({ base, project, onClose, onLock }: { base: string; project: 
           {t.message}。系统不会自动认定唯一标王；如需组织追加，可先重新开放该组。
         </div>
       ))}
+      {unfinished.length > 0 && (
+        <div className="notice" style={{ marginBottom: 10 }}>
+          <b>
+            {unfinished.map((g) => `${g.name}（${g.statusText}）`).join('、')}尚未结束。
+          </b>
+          正常锁定要求各组都已结束。确需提前收场，请单独确认并填写原因（记入审计）：
+          <label className="a-row" style={{ marginTop: 8 }}>
+            <input type="checkbox" checked={early} onChange={(e) => setEarly(e.target.checked)} />
+            确认提前收场：以上分组不再竞标，按当前结果锁定
+          </label>
+          {early && (
+            <textarea
+              aria-label="提前收场原因"
+              placeholder="原因，例如：时间不足，主持人宣布提前收场"
+              value={earlyReason}
+              onChange={(e) => setEarlyReason(e.target.value)}
+              rows={2}
+              style={{ width: '100%', marginTop: 6 }}
+            />
+          )}
+        </div>
+      )}
       <label className="a-row">
         <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
         已与现场核对三组结果，确认锁定
