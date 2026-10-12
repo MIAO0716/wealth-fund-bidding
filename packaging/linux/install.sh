@@ -118,6 +118,22 @@ if [ "$UPGRADE" -eq 0 ]; then
   ok "未发现冲突"
 fi
 
+# ---------------------------------------------------------------- 小内存服务器：自动添加交换空间
+# 内存 2 GB 以下且没有交换空间时，建 1 GB 交换文件，避免内存突然吃紧时数据库或程序被系统强制结束
+mem_mb=$(awk '/^MemTotal:/ { print int($2 / 1024) }' /proc/meminfo)
+swap_mb=$(awk '/^SwapTotal:/ { print int($2 / 1024) }' /proc/meminfo)
+if [ "$mem_mb" -lt 2000 ] && [ "$swap_mb" -eq 0 ] && [ ! -e /swapfile ]; then
+  free_mb=$(df -Pm / | awk 'NR == 2 { print $4 }')
+  if [ "$free_mb" -gt 3000 ] && { fallocate -l 1G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=1024 status=none; } \
+    && chmod 600 /swapfile && mkswap /swapfile >/dev/null 2>&1 && swapon /swapfile 2>/dev/null; then
+    grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    ok "内存 ${mem_mb} MB，已添加 1 GB 交换空间"
+  else
+    rm -f /swapfile
+    warn "内存 ${mem_mb} MB 且未能添加交换空间（磁盘不足或此类服务器不支持），可以继续使用，但请避免同时运行其他耗内存的程序"
+  fi
+fi
+
 # ---------------------------------------------------------------- 系统依赖
 say "安装系统依赖（PostgreSQL、Nginx$( [ "$TLS" = letsencrypt ] && echo '、Certbot' )）"
 export DEBIAN_FRONTEND=noninteractive
