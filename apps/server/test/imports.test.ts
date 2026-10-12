@@ -59,7 +59,7 @@ describe('A01 正式活动未提供底标/首轮', () => {
   });
 });
 
-describe('A02 导入第一组5%、第二组10%、第三组15%', () => {
+describe('A02 导入各组最低增幅 10%', () => {
   it('校验通过，首轮和目标正确', async () => {
     const eventId = await createFormalEvent(ctx);
     const v = await validate(eventId, fullRows('wealth'));
@@ -67,9 +67,9 @@ describe('A02 导入第一组5%、第二组10%、第三组15%', () => {
     expect(v.body.valid).toBe(true);
     expect(v.body.summary).toMatchObject({ total: 16, ok: 16, errors: 0, creates: 16 });
     const pd = v.body.rows.find((r: any) => r.unitCode === 'PD');
-    expect(pd.previewTargetWan).toBe('105.00');
+    expect(pd.previewTargetWan).toBe('110.00');
     const xh = v.body.rows.find((r: any) => r.unitCode === 'XH');
-    expect(xh.previewTargetWan).toBe('115.00');
+    expect(xh.previewTargetWan).toBe('110.00');
     expect(v.body.completenessAfter.wealth).toEqual({ complete: 16, total: 16 });
   });
 });
@@ -80,14 +80,14 @@ describe('A03 非 5 倍数或低于组别门槛', () => {
     const rows = fullRows('wealth');
     rows[0].firstRoundIncreasePp = 12; // 第一组 12%
     rows.find((r) => r.unitCode === 'HP')!.firstRoundIncreasePp = 5; // 第二组 5%
-    rows.find((r) => r.unitCode === 'XH')!.firstRoundIncreasePp = 10; // 第三组 10%
+    rows.find((r) => r.unitCode === 'XH')!.firstRoundIncreasePp = 5; // 第三组 5%
     const v = await validate(eventId, rows);
     expect(v.body.valid).toBe(false);
     expect(v.body.validationId).toBeNull();
     const err = (code: string) => v.body.rows.find((r: any) => r.unitCode === code).errors.join('');
     expect(err('PD')).toContain('不是 5 的整数倍');
     expect(err('HP')).toContain('低于');
-    expect(err('XH')).toContain('第三组最低增幅 15%');
+    expect(err('XH')).toContain('第三组最低增幅 10%');
     expect(v.body.summary.errors).toBe(3);
 
     const fr = await call(ctx.app, 'GET', `/api/v1/admin/events/${eventId}/first-round`, { cookie: ctx.adminCookie });
@@ -161,7 +161,7 @@ describe('A05 同时导入理财和基金32条', () => {
     const fr = await call(ctx.app, 'GET', `/api/v1/admin/events/${eventId}/first-round`, { cookie: ctx.adminCookie });
     const rows = fr.body.projects.wealth.draftRows;
     expect(rows.find((r: any) => r.unitCode === 'PD')).toMatchObject({ baseTargetWan: '300.00', firstRoundPp: 20 });
-    expect(rows.find((r: any) => r.unitCode === 'MH')).toMatchObject({ baseTargetWan: '100.00', firstRoundPp: 5 });
+    expect(rows.find((r: any) => r.unitCode === 'MH')).toMatchObject({ baseTargetWan: '100.00', firstRoundPp: 10 });
   });
 });
 
@@ -169,7 +169,7 @@ describe('导入提交的版本与幂等', () => {
   it('校验后草稿被改动，旧 validationId 不能提交', async () => {
     const eventId = await createFormalEvent(ctx);
     const v1 = await validate(eventId, fullRows('wealth'));
-    await importRows(ctx, eventId, [{ projectCode: 'wealth', unitCode: 'PD', baseTargetWan: '1', firstRoundIncreasePp: 5 }]);
+    await importRows(ctx, eventId, [{ projectCode: 'wealth', unitCode: 'PD', baseTargetWan: '1', firstRoundIncreasePp: 10 }]);
     const c = await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/first-round/imports/commit`, {
       cookie: ctx.adminCookie,
       body: { validationId: v1.body.validationId, expectedDraftVersion: v1.body.draftVersion, idempotencyKey: idem() },

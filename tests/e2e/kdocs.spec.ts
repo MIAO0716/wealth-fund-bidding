@@ -15,7 +15,7 @@ const UNITS: Array<[string, number]> = [
   ['HP', 2], ['HK', 2], ['JA', 2], ['PT', 2], ['CN', 2],
   ['XH', 3], ['YP', 3], ['QP', 3], ['JS', 3], ['CM', 3],
 ];
-const MIN: Record<number, number> = { 1: 5, 2: 10, 3: 15 };
+const MIN: Record<number, number> = { 1: 10, 2: 10, 3: 10 };
 
 test.setTimeout(120_000);
 

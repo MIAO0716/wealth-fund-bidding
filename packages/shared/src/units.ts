@@ -27,9 +27,9 @@ export const PROJECT_NAMES: Record<ProjectCode, string> = {
 export const PROJECT_ORDER: Record<ProjectCode, number> = { wealth: 1, fund: 2 };
 
 export const GROUPS: readonly GroupDef[] = [
-  { groupNo: 1, name: '第一组', minIncreasePp: 5 },
+  { groupNo: 1, name: '第一组', minIncreasePp: 10 },
   { groupNo: 2, name: '第二组', minIncreasePp: 10 },
-  { groupNo: 3, name: '第三组', minIncreasePp: 15 },
+  { groupNo: 3, name: '第三组', minIncreasePp: 10 },
 ];
 
 const RAW_UNITS: Array<[string, string, GroupNo]> = [

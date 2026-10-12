@@ -9,7 +9,7 @@ const UNITS: Array<[string, number]> = [
   ['HP', 2], ['HK', 2], ['JA', 2], ['PT', 2], ['CN', 2],
   ['XH', 3], ['YP', 3], ['QP', 3], ['JS', 3], ['CM', 3],
 ];
-const MIN: Record<number, number> = { 1: 5, 2: 10, 3: 15 };
+const MIN: Record<number, number> = { 1: 10, 2: 10, 3: 10 };
 
 async function adminLogin(ctx: BrowserContext) {
   const r = await ctx.request.post('/api/v1/auth/admin/login', { headers: H, data: { username: 'admin', password: 'e2e-password-123' } });
@@ -70,28 +70,28 @@ test('A21 大屏断网 20 秒后恢复：显示断线并保留数据，恢复后
   const screen = await screenCtx.newPage();
   await screen.goto(screenUrl);
   const pdCurrent = screen.locator('.s-row', { hasText: '浦东' }).locator('.s-current');
-  await expect(pdCurrent).toContainText('5');
-  await expect(screen.getByText('实时同步')).toBeVisible();
-  await bidTo(10);
   await expect(pdCurrent).toContainText('10');
+  await expect(screen.getByText('实时同步')).toBeVisible();
+  await bidTo(15);
+  await expect(pdCurrent).toContainText('15');
 
   await screenCtx.setOffline(true);
   // 断线期间的加码
-  await bidTo(15);
   await bidTo(20);
+  await bidTo(25);
   // 断网 20 秒：明确显示断线，保留最后一次已确认数据，不虚构断线期间的结果
   await expect(screen.getByText('连接中断，数据可能延迟').first()).toBeVisible({ timeout: 35_000 });
   await screen.waitForTimeout(20_000);
-  await expect(pdCurrent).toContainText('10');
+  await expect(pdCurrent).toContainText('15');
   await expect(screen.getByText('连接中断，数据可能延迟').first()).toBeVisible();
 
   await screenCtx.setOffline(false);
-  await expect(pdCurrent).toContainText('20', { timeout: 20_000 });
+  await expect(pdCurrent).toContainText('25', { timeout: 20_000 });
   await expect(screen.getByText('实时同步')).toBeVisible({ timeout: 20_000 });
   // 首轮值不变；最新加码记录不重复
-  await expect(screen.locator('.s-row', { hasText: '浦东' }).locator('.s-first')).toContainText('5');
+  await expect(screen.locator('.s-row', { hasText: '浦东' }).locator('.s-first')).toContainText('10');
   const feed = await screen.locator('.s-feed-item').allTextContents();
-  expect(feed.filter((t) => t.includes('15% → 20%'))).toHaveLength(1);
+  expect(feed.filter((t) => t.includes('20% → 25%'))).toHaveLength(1);
   await Promise.all([admin.close(), phone.close(), screenCtx.close()]);
 });
 
@@ -125,8 +125,8 @@ test('SSE 被拦截时降级为 2 秒拉取，数据仍然更新', async ({ brow
   const screen = await screenCtx.newPage();
   await screen.goto(screenUrl);
   await expect(screen.getByText('降级刷新（每 2 秒）')).toBeVisible({ timeout: 20_000 });
-  await bidTo(10);
-  await expect(screen.locator('.s-row', { hasText: '浦东' }).locator('.s-current')).toContainText('10', { timeout: 5_000 });
+  await bidTo(15);
+  await expect(screen.locator('.s-row', { hasText: '浦东' }).locator('.s-current')).toContainText('15', { timeout: 5_000 });
   await Promise.all([admin.close(), phone.close(), screenCtx.close()]);
 });
 

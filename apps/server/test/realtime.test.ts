@@ -120,7 +120,7 @@ describe('实时推送', () => {
     const p = connect(`/api/v1/bidder/events/${eventId}/stream?since=${pdMe.seq}`, pd);
     await waitFor(() => s.events.some((e) => e.event === 'hello') && p.events.some((e) => e.event === 'hello'));
 
-    const r = await bid(ctx, eventId, 'wealth', mh, { targetIncreasePp: 10, expectedBidVersion: 0 });
+    const r = await bid(ctx, eventId, 'wealth', mh, { targetIncreasePp: 15, expectedBidVersion: 0 });
     const t0 = Date.now();
     await waitFor(() => s.messages().some((m) => m.type === 'BID_ACCEPTED'));
     const latency = s.events.find((e) => e.data?.type === 'BID_ACCEPTED')!.at - t0;
@@ -152,7 +152,7 @@ describe('实时推送', () => {
 
     // 断线期间发生 3 次加码
     await bid(ctx, eventId, 'wealth', pd, { targetIncreasePp: 40, expectedBidVersion: 1 });
-    await bid(ctx, eventId, 'wealth', mh, { targetIncreasePp: 10, expectedBidVersion: 0 });
+    await bid(ctx, eventId, 'wealth', mh, { targetIncreasePp: 15, expectedBidVersion: 0 });
     await bid(ctx, eventId, 'wealth', pd, { targetIncreasePp: 45, expectedBidVersion: 2 });
 
     const s2 = connect(`/api/v1/screen/events/${eventId}/stream`, screen, lastId);
@@ -161,7 +161,7 @@ describe('实时推送', () => {
     const replay = s2.messages();
     expect(replay.map((m) => [m.unitCode, m.data.toPp])).toEqual([
       ['PD', 40],
-      ['MH', 10],
+      ['MH', 15],
       ['PD', 45],
     ]);
     const seqs = replay.map((m) => m.seq);
@@ -222,7 +222,7 @@ describe('FIX-04 实时连接随访问权限失效', () => {
     const old = await pdStream(eventId, pd);
     // 撤销与随后的报价背靠背提交
     await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/units/PD/revoke`, { cookie: ctx.adminCookie, body: { reason: '测试' } });
-    await bid(ctx, eventId, 'wealth', mh, { targetIncreasePp: 10, expectedBidVersion: 0 });
+    await bid(ctx, eventId, 'wealth', mh, { targetIncreasePp: 15, expectedBidVersion: 0 });
     await control(ctx, eventId, 'wealth', 'PAUSE');
     await waitFor(() => old.ended(), 5000);
     expect(old.messages().filter((m) => m.type === 'PROJECT_STATUS' || m.type === 'BID_ACCEPTED')).toHaveLength(0);

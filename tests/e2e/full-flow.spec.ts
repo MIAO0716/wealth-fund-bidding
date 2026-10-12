@@ -28,7 +28,7 @@ const UNITS: Array<[string, number]> = [
   ['HP', 2], ['HK', 2], ['JA', 2], ['PT', 2], ['CN', 2],
   ['XH', 3], ['YP', 3], ['QP', 3], ['JS', 3], ['CM', 3],
 ];
-const MIN: Record<number, number> = { 1: 5, 2: 10, 3: 15 };
+const MIN: Record<number, number> = { 1: 10, 2: 10, 3: 10 };
 
 function rows(project: 'wealth' | 'fund') {
   return UNITS.map(([code, g]) => ({
@@ -171,13 +171,13 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await expect(screen.getByText('标王候选：浦东')).toBeVisible();
   await shot(pd.page, 'phone-bid');
 
-  // 闵行 5% → 选 +10 → 15%
+  // 闵行 10% → 选 +10 → 20%
   await mh.page.getByRole('button', { name: /\+10/ }).click();
-  await expect(mh.page.locator('.m-preview')).toContainText('15%');
+  await expect(mh.page.locator('.m-preview')).toContainText('20%');
   await mh.page.locator('.m-main-btn').click();
   await mh.page.locator('.modal').getByRole('button', { name: '确认提交' }).click();
   await expect(mh.page.getByRole('heading', { name: '追加成功 · 服务器已确认' })).toBeVisible();
-  await expect(screen.locator('.s-row', { hasText: '闵行' }).locator('.s-current')).toContainText('15');
+  await expect(screen.locator('.s-row', { hasText: '闵行' }).locator('.s-current')).toContainText('20');
   await shot(screen, 'screen-live');
   await shot(admin, 'admin-control');
 

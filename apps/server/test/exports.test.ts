@@ -60,7 +60,7 @@ describe('A24 两项目锁定并导出', () => {
     });
     await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/projects/wealth/units/MH/bids`, {
       cookie: ctx.adminCookie,
-      body: { targetIncreasePp: 10, expectedBidVersion: 0, idempotencyKey: 'proxy-mh-00001', reason: '=HYPERLINK("http://x")' },
+      body: { targetIncreasePp: 15, expectedBidVersion: 0, idempotencyKey: 'proxy-mh-00001', reason: '=HYPERLINK("http://x")' },
     });
 
     // 未锁定时导出：明显标为过程数据

@@ -305,7 +305,7 @@ describe('A17 浦东改请求冒充闵行', () => {
     const r = await bid(ctx, eventId, 'wealth', pd, { targetIncreasePp: 35, expectedBidVersion: 0, unitCode: 'MH' });
     expect(r.status).toBe(201);
     expect(r.body.receipt.unitCode).toBe('PD');
-    expect((await me(ctx, eventId, mh)).projects.wealth.currentPp).toBe(5);
+    expect((await me(ctx, eventId, mh)).projects.wealth.currentPp).toBe(10);
     // 领导会话不能访问管理接口、其他活动
     const adminTry = await call(ctx.app, 'GET', `/api/v1/admin/events/${eventId}/state`, { cookie: pd });
     expect(adminTry.status).toBe(401);
@@ -497,7 +497,7 @@ describe('A23 管理员代录', () => {
     expect((await proxy({ targetIncreasePp: 5, expectedBidVersion: 0, idempotencyKey: idem(), reason: 'x' })).body.error.code).toBe('NOT_GREATER');
     const ok = await proxy({ targetIncreasePp: 15, expectedBidVersion: 0, idempotencyKey: idem(), reason: '手机没电，领导口头确认' });
     expect(ok.status).toBe(201);
-    expect(ok.body.receipt).toMatchObject({ source: 'ADMIN_PROXY', fromPp: 5, toPp: 15, deltaPp: 10 });
+    expect(ok.body.receipt).toMatchObject({ source: 'ADMIN_PROXY', fromPp: 10, toPp: 15, deltaPp: 5 });
     const rec = await ctx.db.query(`SELECT source, reason, actor_type FROM bid_records WHERE event_id = $1 AND unit_code = 'MH'`, [eventId]);
     expect(rec.rows[0]).toMatchObject({ source: 'ADMIN_PROXY', reason: '手机没电，领导口头确认', actor_type: 'ADMIN' });
     // 数据库层兜底：直接 UPDATE 下调被拒绝
