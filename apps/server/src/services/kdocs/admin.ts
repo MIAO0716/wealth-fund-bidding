@@ -2,6 +2,7 @@
  * 金山文档接入的管理操作：保存配置、测试连接、初始化表格版式、改用模拟金山文档、查看处理记录。
  */
 
+import { randomBytes } from 'node:crypto';
 import { GROUP_BY_NO, KDOCS_LAYOUT, type KdocsFormat, type KdocsWrite, UNITS, parseUnitFiles } from '@bidding/shared';
 import { withTx } from '../../db/pool';
 import { bizError } from '../../lib/errors';
@@ -10,10 +11,12 @@ import { type Actor, audit } from '../core';
 import type { AppContext } from '../context';
 import { qrDataUrl, wifiInfo } from '../auth';
 import { getEventRow, readConfig } from '../events';
-import { KdocsError, callScript, isMockUrl, normalizeWebhookUrl } from './client';
+import { KdocsError, OLD_SCRIPT_MESSAGE, callScript, isCurrentScript, isMockUrl, normalizeWebhookUrl } from './client';
 import type { KdocsMock } from './mock';
 import { KDOCS_COLORS } from './template';
 import type { KdocsBindingRow, KdocsSyncManager } from './sync';
+
+const MOCK_DEMO_ONLY = '模拟金山文档只能用于演示活动；正式活动请连接真实金山文档';
 
 export interface KdocsDeps {
   ctx: AppContext;
@@ -87,7 +90,7 @@ export async function saveKdocsBinding(
   body: { webhookUrl?: unknown; token?: unknown; intervalSec?: unknown; enabled?: unknown; unitFiles?: unknown; autoSync?: unknown },
 ) {
   if (d.ctx.config.readOnly) throw bizError('READ_ONLY');
-  await getEventRow(d.ctx.db, eventId);
+  const ev = await getEventRow(d.ctx.db, eventId);
   const existing = await d.sync.binding(eventId);
   let webhookUrl = existing?.webhook_url ?? '';
   if (body.webhookUrl !== undefined) {
@@ -98,6 +101,8 @@ export async function saveKdocsBinding(
     }
   }
   if (!webhookUrl) throw bizError('BAD_REQUEST', '请填写脚本 webhook 链接');
+  // 模拟金山文档只用于演练：正式活动不能绑定（模拟表格谁拿到链接都能填写）
+  if (isMockUrl(webhookUrl) && !ev.is_demo) throw bizError('DEMO_ONLY', MOCK_DEMO_ONLY);
   let token = existing?.token ?? '';
   if (typeof body.token === 'string' && body.token.trim()) token = body.token.trim();
   if (!token) throw bizError('BAD_REQUEST', '请填写脚本令牌');
@@ -287,8 +292,6 @@ async function requireBinding(d: KdocsDeps, eventId: string): Promise<KdocsBindi
   return b;
 }
 
-const OLD_SCRIPT = '金山表格里的同步脚本版本过旧（需要 1.3.0 及以上）：请在管理端「金山文档」下载最新脚本，在总控文件的脚本编辑器中全选替换并保存，再点「一键连接」';
-
 function kdocsBizError(e: unknown): never {
   if (e instanceof KdocsError) throw bizError('BAD_REQUEST', e.message);
   throw e;
@@ -304,7 +307,7 @@ export async function testKdocs(d: KdocsDeps, eventId: string) {
   try {
     if (!b.unit_files) {
       const r = await callScript(b.webhook_url, b.token, { action: 'ping' }, d.sync.callOpts);
-      if (r.supportsExpect !== true) throw new KdocsError(OLD_SCRIPT, 'PROTOCOL');
+      if (!isCurrentScript(r)) throw new KdocsError(OLD_SCRIPT_MESSAGE, 'PROTOCOL');
       const sheets = r.sheets ?? [];
       return {
         ok: true,
@@ -316,7 +319,7 @@ export async function testKdocs(d: KdocsDeps, eventId: string) {
     }
     const reads = UNITS.map((u) => ({ file: b.unit_files![u.code], sheet: u.name, range: 'A1' }));
     const r = await callScript(b.webhook_url, b.token, { action: 'batch', reads }, d.sync.callOpts);
-    if (r.supportsExpect !== true) throw new KdocsError(OLD_SCRIPT, 'PROTOCOL');
+    if (!isCurrentScript(r)) throw new KdocsError(OLD_SCRIPT_MESSAGE, 'PROTOCOL');
     const bad = (r.reads ?? []).filter((x) => x.values === null);
     return {
       ok: true,
@@ -404,7 +407,7 @@ export async function initKdocsLayout(d: KdocsDeps, eventId: string, actor: Acto
       { action: 'batch', writes: layoutWrites(clearInputs, title, b.unit_files), formats: layoutFormats(b.unit_files) },
       d.sync.callOpts,
     );
-    if (r.supportsExpect !== true) throw new KdocsError(OLD_SCRIPT, 'PROTOCOL');
+    if (!isCurrentScript(r)) throw new KdocsError(OLD_SCRIPT_MESSAGE, 'PROTOCOL');
     d.sync.resetWritten(eventId);
     await withTx(d.ctx.db, (tx) => audit(tx, eventId, actor, 'KDOCS_LAYOUT', { details: { clearInputs, written: r.written ?? 0 } }));
     return {
@@ -426,9 +429,11 @@ export async function initKdocsLayout(d: KdocsDeps, eventId: string, actor: Acto
  */
 export async function useKdocsMock(d: KdocsDeps, eventId: string, actor: Actor, localPort: number, mode: unknown = 'files') {
   if (!d.mock) throw bizError('FORBIDDEN', '本程序未启用模拟金山文档');
+  if (!(await getEventRow(d.ctx.db, eventId)).is_demo) throw bizError('DEMO_ONLY', MOCK_DEMO_ONLY);
   const existing = await d.sync.binding(eventId);
   if (existing?.enabled) throw bizError('INVALID_STATE', '请先停止同步，再切换到模拟金山文档');
-  const base = `mock${eventId.replace(/-/g, '').slice(0, 12)}`;
+  // 模拟文件编号随机生成：拿不到链接就无法打开或填写（与金山文件分享链接同理）
+  const base = `mock${randomBytes(10).toString('hex')}`;
   const single = mode === 'single';
   const hubId = single ? base : `${base}hub`;
   if (!d.mock.file(hubId)) d.mock.createFile(hubId, single ? UNITS : []);

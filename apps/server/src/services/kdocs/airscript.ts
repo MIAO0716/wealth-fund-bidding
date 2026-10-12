@@ -10,7 +10,7 @@
  * 语法保持 ES5（var / function），不依赖新语法。
  */
 
-export const AIRSCRIPT_VERSION = '1.3.0';
+export const AIRSCRIPT_VERSION = '1.4.0';
 
 export const AIRSCRIPT_SOURCE = `/**
  * 理财、基金现场竞标 · 金山文档同步脚本 v${AIRSCRIPT_VERSION}（协议 1）
@@ -104,6 +104,8 @@ function main(argv) {
     supportsFiles: true,
     supportsExpect: true,
     ok: true,
+    // 与 writes 一一对应：ok 已写入、skipped 条件不符未写、error 写入失败（本机据此重试，不会把失败当成已送达）
+    writeStatus: [],
     sheets: [],
     missingSheets: [],
     reads: [],
@@ -140,7 +142,10 @@ function main(argv) {
     }
     return groups[key];
   }
-  for (var i = 0; i < writes.length; i++) groupOf(writes[i].file).writes.push(writes[i]);
+  for (var i = 0; i < writes.length; i++) {
+    groupOf(writes[i].file).writes.push({ index: i, write: writes[i] });
+    result.writeStatus.push('error');
+  }
   for (var j = 0; j < reads.length; j++) groupOf(reads[j].file).reads.push({ index: j, read: reads[j] });
   for (var k = 0; k < formats.length; k++) groupOf(formats[k].file).formats.push(formats[k]);
   var readResults = [];
@@ -164,7 +169,8 @@ function main(argv) {
       var names = openError ? [] : listSheetNames(app);
       // 先写后读：本次读取的内容已包含本次写入
       for (var wi = 0; wi < grp.writes.length; wi++) {
-        var w = grp.writes[wi];
+        var wIndex = grp.writes[wi].index;
+        var w = grp.writes[wi].write;
         if (openError) {
           result.errors.push(w.sheet + '：' + openError);
           continue;
@@ -178,10 +184,12 @@ function main(argv) {
           // 条件写入：格子里的内容已被领导改过时不写（例如清空「我要加到」时领导刚好填了新数字）
           if (w.expect !== undefined && cellText(target.Value2) !== cellText(w.expect)) {
             result.skipped++;
+            result.writeStatus[wIndex] = 'skipped';
             continue;
           }
           target.Value = isSingleCell(w.values) ? w.values[0][0] : w.values;
           result.written++;
+          result.writeStatus[wIndex] = 'ok';
         } catch (e1) {
           result.errors.push('写入 ' + w.sheet + '!' + w.range + ' 失败：' + e1);
         }

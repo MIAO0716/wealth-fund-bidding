@@ -30,6 +30,7 @@ interface Overview {
     calls: number;
     failures: number;
     missingUnits: string[];
+    undelivered: string[];
     pace: 'HOT' | 'WARM' | 'COLD' | 'IDLE' | null;
     nextSyncAt: string | null;
   } | null;
@@ -76,7 +77,8 @@ const STATUS_CHIP: Record<string, [string, string]> = {
   PREEXISTING: ['grey', '同步前已填写'],
 };
 
-export function KdocsTab({ eventId }: TabProps) {
+export function KdocsTab({ eventId, state }: TabProps) {
+  const isDemo = state.event.isDemo;
   const base = `/api/v1/admin/events/${eventId}/kdocs`;
   const [ov, setOv] = useState<Overview | null>(null);
   const [form, setForm] = useState({ webhookUrl: '', token: '', intervalSec: 3, autoSync: false });
@@ -376,11 +378,12 @@ export function KdocsTab({ eventId }: TabProps) {
             <>
               <p className="small muted" style={{ marginTop: 0 }}>
                 没有金山账号也能完整演练：使用本机「模拟金山文档」，它执行的就是同一份同步脚本。模拟表格页面可以在手机上打开（与电脑同一 Wi-Fi）。
+                {!isDemo && <b>模拟金山文档只能用于演示活动（谁拿到模拟表格链接都能填写），正式活动请连接真实金山文档。</b>}
               </p>
               <div className="a-row" style={{ flexWrap: 'wrap' }}>
                 <button
                   className="btn"
-                  disabled={busy || !!b?.enabled}
+                  disabled={busy || !!b?.enabled || !isDemo}
                   onClick={() =>
                     void run(
                       () => api.post<Overview>(`${base}/use-mock`, { mode }),
@@ -472,8 +475,20 @@ export function KdocsTab({ eventId }: TabProps) {
                 )}
                 {!!st?.missingUnits.length && (
                   <tr>
-                    <td>缺少工作表</td>
-                    <td style={{ color: 'var(--red)' }}>{st.missingUnits.join('、')}</td>
+                    <td>没有读到</td>
+                    <td style={{ color: 'var(--red)' }}>
+                      {st.missingUnits.join('、')}
+                      <span className="small">（结束本组、锁定前会拦截，需核对后填写原因才能继续）</span>
+                    </td>
+                  </tr>
+                )}
+                {!!st?.undelivered?.length && (
+                  <tr>
+                    <td>结果未写回</td>
+                    <td style={{ color: 'var(--red)' }}>
+                      {st.undelivered.join('、')}
+                      <span className="small">（报价已按规则处理，结果尚未写回表格，下次读取自动重试）</span>
+                    </td>
                   </tr>
                 )}
                 {b.enabled && b.autoSync && st?.pace && (

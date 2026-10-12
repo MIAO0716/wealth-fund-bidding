@@ -19,7 +19,7 @@ export interface KdocsReadSummary {
 
 interface Brief {
   binding: { enabled: boolean; autoSync: boolean; isMock: boolean } | null;
-  status: { state: string; lastError: string | null; lastRead: KdocsReadSummary | null; calls: number } | null;
+  status: { state: string; lastError: string | null; lastRead: KdocsReadSummary | null; calls: number; missingUnits: string[]; undelivered: string[] } | null;
 }
 
 export function readSummaryText(r: KdocsReadSummary | null | undefined): string {
@@ -96,6 +96,8 @@ export function KdocsReadBar({ eventId, compact = false, onRead }: { eventId: st
       <div className="kd-read-info">
         <span>{readSummaryText(st?.lastRead)}</span>
         {(err || st?.state === 'ERROR') && <span className="err-text">读取失败：{err ?? st?.lastError}</span>}
+        {!!st?.missingUnits?.length && st.state !== 'ERROR' && <span className="err-text">没有读到：{st.missingUnits.join('、')}（这些单位的填写未处理）</span>}
+        {!!st?.undelivered?.length && <span className="err-text">已处理、结果尚未写回表格：{st.undelivered.join('、')}（下次读取自动重试；请以本页与大屏为准）</span>}
         {!compact && (
           <span className="small muted">
             {brief.binding.autoSync ? '已开启自动定时读取' : '手动读取：领导说填好了，点一下即可'}

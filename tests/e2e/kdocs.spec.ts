@@ -24,12 +24,8 @@ test('领导在（模拟）金山文档中只填一个格子：加码生效（�
   const req = admin.request;
   expect((await req.post('/api/v1/auth/admin/login', { headers: H, data: { username: 'admin', password: 'e2e-password-123' } })).ok()).toBe(true);
 
-  const ev = await (
-    await req.post('/api/v1/admin/events', {
-      headers: H,
-      data: { config: { name: '金山文档演练', eventDate: '2099-12-31', metricName: 'm', amountBasis: '销量', statPeriod: 'p', dataSource: 'E2E' } },
-    })
-  ).json();
+  // 模拟金山文档只能用于演示活动
+  const ev = await (await req.post('/api/v1/admin/events', { headers: H, data: { isDemo: true } })).json();
   const eventId: string = ev.event.id;
   const rows = UNITS.map(([u, g]) => ({ projectCode: 'wealth', unitCode: u, baseTargetWan: '1000', firstRoundIncreasePp: u === 'PD' ? 30 : MIN[g] }));
   const v = await (await req.post(`/api/v1/admin/events/${eventId}/first-round/imports/validate`, { headers: H, data: { rows } })).json();
@@ -37,10 +33,12 @@ test('领导在（模拟）金山文档中只填一个格子：加码生效（�
     headers: H,
     data: { validationId: v.validationId, expectedDraftVersion: v.draftVersion, idempotencyKey: `imp-${eventId}` },
   });
-  await req.post(`/api/v1/admin/events/${eventId}/projects/wealth/publish-first-round`, {
+  const fr = await (await req.get(`/api/v1/admin/events/${eventId}/first-round`)).json();
+  const pub = await req.post(`/api/v1/admin/events/${eventId}/projects/wealth/publish-first-round`, {
     headers: H,
-    data: { expectedDraftVersion: 1, idempotencyKey: `pub-${eventId}`, confirm: true },
+    data: { expectedDraftVersion: fr.projects.wealth.project.draftVersion, idempotencyKey: `pub-${eventId}`, confirm: true },
   });
+  expect(pub.ok()).toBe(true);
   const st = await (await req.get(`/api/v1/admin/events/${eventId}/state`)).json();
   await req.post(`/api/v1/admin/events/${eventId}/projects/wealth/control`, {
     headers: H,

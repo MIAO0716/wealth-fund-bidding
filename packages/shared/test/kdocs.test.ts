@@ -2,13 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { kdocsReadRange, parseTargetCell } from '../src/kdocs';
 
 describe('金山文档单元格解析', () => {
-  it('「加到」：数字、文本、百分号、全角、百分比格式均可识别', () => {
+  it('「我要加到」：整数、文本、百分号、全角均可识别', () => {
     expect(parseTargetCell(35)).toEqual({ ok: true, pp: 35 });
     expect(parseTargetCell('35')).toEqual({ ok: true, pp: 35 });
     expect(parseTargetCell(' 35% ')).toEqual({ ok: true, pp: 35 });
     expect(parseTargetCell('３５％')).toEqual({ ok: true, pp: 35 });
-    expect(parseTargetCell(0.35)).toEqual({ ok: true, pp: 35 });
-    expect(parseTargetCell(1.2)).toEqual({ ok: true, pp: 120 });
+    expect(parseTargetCell(120)).toEqual({ ok: true, pp: 120 });
+  });
+
+  it('不按大小猜测含义：数字 1 就是 1%，不会变成 100%；小数一律拒绝', () => {
+    expect(parseTargetCell(1)).toEqual({ ok: true, pp: 1 });
+    expect(parseTargetCell('1')).toEqual({ ok: true, pp: 1 });
+    expect(parseTargetCell(0.4)).toMatchObject({ ok: false, reason: expect.stringContaining('不是整数') });
+    expect(parseTargetCell('0.4')).toMatchObject({ ok: false });
+    expect(parseTargetCell(1.2)).toMatchObject({ ok: false });
   });
 
   it('非整数、文字、空白、超范围均拒绝并说明', () => {

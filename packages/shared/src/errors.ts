@@ -28,6 +28,7 @@ export const ERROR_MESSAGES = {
   REASON_REQUIRED: '请填写原因',
   CONFIRM_REQUIRED: '重大操作需要二次确认',
   DEMO_ONLY: '仅演示活动允许该操作',
+  KDOCS_INCOMPLETE: '金山表格没有全部读取成功，请核对后再操作',
   BAD_REQUEST: '请求格式不正确',
   READ_ONLY: '系统处于只读维护状态，暂停写入',
   CREDENTIAL_INVALID: '二维码已失效或已被使用，请联系工作人员重新发放',

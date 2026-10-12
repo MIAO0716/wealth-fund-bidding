@@ -18,10 +18,17 @@ afterAll(async () => {
 const api = (eventId: string, path = '') => `/api/v1/admin/events/${eventId}/kdocs${path}`;
 const mock = () => ctx.kdocs.mock!;
 
-/** 新活动（浦东首轮 30%），绑定模拟金山文档并开启同步（间隔 60 秒，测试中手动触发） */
+/** 演示活动（模拟金山文档只能用于演示活动） */
+async function createDemo(): Promise<string> {
+  const r = await call(ctx.app, 'POST', '/api/v1/admin/events', { cookie: ctx.adminCookie, body: { isDemo: true } });
+  if (r.status !== 201) throw new Error(JSON.stringify(r.body));
+  return r.body.event.id;
+}
+
+/** 新演示活动（浦东首轮 30%），绑定模拟金山文档并开启同步（间隔 60 秒，测试中手动触发） */
 async function prepared(opts: { live?: boolean; enable?: boolean } = {}) {
   mock().failNext = 0;
-  const eventId = await createFormalEvent(ctx);
+  const eventId = await createDemo();
   await importRows(ctx, eventId, [...fullRows('wealth', { pp: (c, m) => (c === 'PD' ? 30 : m) }), ...fullRows('fund', { base: () => '200' })]);
   const m = await call(ctx.app, 'POST', api(eventId, '/use-mock'), { cookie: ctx.adminCookie, body: {} });
   expect(m.status).toBe(200);
@@ -203,7 +210,7 @@ describe('配置与表格初始化', () => {
     expect(zip.rawPayload.includes(Buffer.from('00-竞标总控（只给工作人员）.xlsx'))).toBe(true);
     const script = await ctx.app.inject({ method: 'GET', url: '/api/v1/admin/kdocs/airscript.js', headers: { cookie: ctx.adminCookie } });
     expect(script.body).toContain('return main(Context.argv);');
-    expect(script.body).toContain('v1.3.0');
+    expect(script.body).toContain('v1.4.0');
   });
 
   it('金山表格里还是旧版脚本：测试连接提示重新下载脚本', async () => {
@@ -217,7 +224,7 @@ describe('配置与表格初始化', () => {
     try {
       const t = await call(ctx.app, 'POST', api(eventId, '/test'), { cookie: ctx.adminCookie, body: {} });
       expect(t.status).toBe(422);
-      expect(t.body.error.message).toContain('需要 1.3.0 及以上');
+      expect(t.body.error.message).toContain('需要 1.4.0 及以上');
     } finally {
       ctx.kdocs.sync.callOpts.fetchImpl = saved;
     }
@@ -442,7 +449,7 @@ describe('一键连接', () => {
     const { eventId: a, fileId } = await prepared({ enable: false });
     const oa = (await call(ctx.app, 'GET', api(a), { cookie: ctx.adminCookie })).body;
     // 新活动直接粘贴同一个链接、令牌和 16 家单位文件链接
-    const b = await createFormalEvent(ctx, { ...FULL, name: '一键连接测试' });
+    const b = await createDemo();
     const r = await connect(b, { webhookUrl: oa.binding.webhookUrl, token: mock().token, unitFiles: filesText(oa) });
     expect(r.status).toBe(200);
     expect(r.body.ok).toBe(true);
@@ -453,13 +460,13 @@ describe('一键连接', () => {
       ['启用读取', true],
     ]);
     expect(r.body.overview.binding.enabled).toBe(true);
-    expect(cell(fileId, '浦东', 'B1')).toBe('第一组 · 一键连接测试');
+    expect(String(cell(fileId, '浦东', 'B1'))).toMatch(/^第一组 · 【演示】/);
   });
 
   it('同一张表格改由新活动同步时，旧活动的同步自动停止', async () => {
     const { eventId: a } = await prepared();
     const oa = (await call(ctx.app, 'GET', api(a), { cookie: ctx.adminCookie })).body;
-    const b = await createFormalEvent(ctx, { ...FULL, name: '新活动' });
+    const b = await createDemo();
     const r = await connect(b, { webhookUrl: oa.binding.webhookUrl, token: mock().token, unitFiles: filesText(oa) });
     expect(r.body.steps.at(-1).detail).toContain('读取已自动停止');
     const after = await call(ctx.app, 'GET', api(a), { cookie: ctx.adminCookie });
@@ -530,7 +537,7 @@ describe('每家单位一个文件（各单位互相看不到）', () => {
     const pd = r.body.cards.find((c: any) => c.unitCode === 'PD');
     expect(pd.url).toMatch(/\/mock-kdocs\?file=mock[0-9a-f]+-PD$/);
     expect(pd.qrDataUrl).toMatch(/^data:image\/png;base64,/);
-    const single = await createFormalEvent(ctx);
+    const single = await createDemo();
     await call(ctx.app, 'POST', api(single, '/use-mock'), { cookie: ctx.adminCookie, body: { mode: 'single' } });
     const r2 = await call(ctx.app, 'GET', api(single, '/cards'), { cookie: ctx.adminCookie });
     expect(r2.status).toBe(422);
@@ -560,7 +567,7 @@ describe('每家单位一个文件（各单位互相看不到）', () => {
 
   it('一个文件 16 张工作表的方式仍可使用', async () => {
     mock().failNext = 0;
-    const eventId = await createFormalEvent(ctx);
+    const eventId = await createDemo();
     await importRows(ctx, eventId, fullRows('wealth', { pp: (c, m) => (c === 'PD' ? 30 : m) }));
     const m = await call(ctx.app, 'POST', api(eventId, '/use-mock'), { cookie: ctx.adminCookie, body: { mode: 'single' } });
     const fileId: string = m.body.mockFileId;
@@ -639,4 +646,108 @@ describe('手动读取（默认）', () => {
     expect(result(fileId, '浦东')).toContain('已生效');
     await call(ctx.app, 'PUT', api(eventId), { cookie: ctx.adminCookie, body: { enabled: false } });
   }, 30_000);
+});
+
+describe('审查报告修复（F01–F05）', () => {
+  const pdSheet = (fileId: string) => mock().file(fileOf(fileId, '浦东'))!.sheet('浦东')!;
+
+  it('F01：高值报价不自动通过确认，提示由工作人员核实代录', async () => {
+    const { eventId, fileId } = await prepared({ live: true });
+    await ctx.db.query(`UPDATE events SET config = config || '{"highValueConfirmPp": 35}'::jsonb WHERE id = $1`, [eventId]);
+    fill(fileId, '浦东', '35');
+    await syncNow(eventId);
+    expect(result(fileId, '浦东')).toContain('增幅较大（35%），需要工作人员核实');
+    const n = await ctx.db.query('SELECT count(*)::int AS n FROM bid_records WHERE event_id = $1', [eventId]);
+    expect(n.rows[0].n).toBe(0);
+  });
+
+  it('F01：数字 1 按 1% 处理（不会变成 100%）', async () => {
+    const { eventId, fileId } = await prepared({ live: true });
+    fill(fileId, '浦东', 1);
+    await syncNow(eventId);
+    expect(result(fileId, '浦东')).toContain('✘ 「1」未生效');
+    const n = await ctx.db.query('SELECT count(*)::int AS n FROM bid_records WHERE event_id = $1', [eventId]);
+    expect(n.rows[0].n).toBe(0);
+  });
+
+  it('F02：有单位没读到时，结束本组被拦截；填写原因可强制执行并记入审计', async () => {
+    const { eventId, fileId } = await prepared({ live: true });
+    const sheet = pdSheet(fileId);
+    sheet.Name = '浦东（改名）';
+    try {
+      const r = await control(ctx, eventId, 'wealth', 'CLOSE_GROUP', { groupNo: 1 });
+      expect(r.status).toBe(409);
+      expect(r.body.error.code).toBe('KDOCS_INCOMPLETE');
+      expect(r.body.error.message).toContain('浦东');
+      expect(r.body.error.details.units).toEqual(['浦东']);
+      const noReason = await control(ctx, eventId, 'wealth', 'CLOSE_GROUP', { groupNo: 1, kdocsForce: true });
+      expect(noReason.body.error.code).toBe('REASON_REQUIRED');
+      const forced = await control(ctx, eventId, 'wealth', 'CLOSE_GROUP', { groupNo: 1, kdocsForce: true, kdocsForceReason: '浦东电话确认无新报价' });
+      expect(forced.status).toBe(200);
+      expect(forced.body.kdocsWarning).toContain('浦东');
+      const a = await ctx.db.query(`SELECT reason, details FROM audit_logs WHERE event_id = $1 AND action = 'KDOCS_FORCE'`, [eventId]);
+      expect(a.rows[0].reason).toBe('浦东电话确认无新报价');
+      expect(a.rows[0].details.units).toEqual(['浦东']);
+    } finally {
+      sheet.Name = '浦东';
+    }
+  });
+
+  it('F03：结果写不回表格时不算送达；重试期间同一数字不会被当成新报价，恢复后补写成功结果', async () => {
+    const { eventId, fileId } = await prepared({ live: true });
+    await syncNow(eventId);
+    const sheet = pdSheet(fileId);
+    const realWrite = sheet.write.bind(sheet);
+    fill(fileId, '浦东', '35');
+    sheet.write = () => {
+      throw new Error('没有编辑权限');
+    };
+    try {
+      const r1 = await syncNow(eventId);
+      expect(r1.status.lastRead.applied).toBe(1);
+      expect(r1.status.undelivered).toEqual(['浦东']);
+      expect(cell(fileId, '浦东', 'B6')).toBe('35');
+      // 仍写不回：再次读取，同一个 35 不会被当成新报价
+      const r2 = await syncNow(eventId);
+      expect(r2.status.lastRead).toMatchObject({ applied: 0, rejected: 0 });
+      const rows = await ctx.db.query('SELECT count(*)::int AS n, bool_or(cleared) AS cleared FROM kdocs_rows WHERE event_id = $1', [eventId]);
+      expect(rows.rows[0]).toEqual({ n: 1, cleared: false });
+    } finally {
+      sheet.write = realWrite;
+    }
+    const r3 = await syncNow(eventId);
+    expect(r3.status.undelivered).toEqual([]);
+    expect(result(fileId, '浦东')).toContain('✔ 理财已生效：30% → 35%');
+    expect(cell(fileId, '浦东', 'B6')).toBeNull();
+    const n = await ctx.db.query('SELECT count(*)::int AS n FROM bid_records WHERE event_id = $1', [eventId]);
+    expect(n.rows[0].n).toBe(1);
+  });
+
+  it('F04：正式活动不能使用模拟金山文档；模拟文件编号随机、无法从活动编号推出', async () => {
+    const formal = await createFormalEvent(ctx);
+    const r = await call(ctx.app, 'POST', api(formal, '/use-mock'), { cookie: ctx.adminCookie, body: {} });
+    expect(r.status).toBe(422);
+    expect(r.body.error.code).toBe('DEMO_ONLY');
+    const p = await call(ctx.app, 'PUT', api(formal), {
+      cookie: ctx.adminCookie,
+      body: { webhookUrl: 'http://127.0.0.1:8080/mock-kdocs/api/v3/ide/file/mockx/script/s/sync_task', token: 't' },
+    });
+    expect(p.body.error.code).toBe('DEMO_ONLY');
+    const { eventId, fileId } = await prepared({ enable: false });
+    expect(fileId).not.toContain(eventId.replace(/-/g, '').slice(0, 12));
+    expect(fileId).toMatch(/^mock[0-9a-f]{20}hub$/);
+  });
+
+  it('F05：暂停期间填写的数字，恢复前按暂停状态处理（不生效），恢复后不会被受理', async () => {
+    const { eventId, fileId } = await prepared({ live: true });
+    await control(ctx, eventId, 'wealth', 'PAUSE');
+    fill(fileId, '浦东', '35');
+    const r = await control(ctx, eventId, 'wealth', 'RESUME');
+    expect(r.status).toBe(200);
+    await syncNow(eventId);
+    expect(result(fileId, '浦东')).toMatch(/✘ 「35」未生效：.*暂停/);
+    expect(cell(fileId, '浦东', 'B6')).toBeNull();
+    const n = await ctx.db.query('SELECT count(*)::int AS n FROM bid_records WHERE event_id = $1', [eventId]);
+    expect(n.rows[0].n).toBe(0);
+  });
 });

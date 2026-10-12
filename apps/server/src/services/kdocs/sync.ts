@@ -32,7 +32,7 @@ import type { AppContext } from '../context';
 import { readConfig } from '../events';
 import { acknowledgeBase } from '../projects';
 import { bidderMe } from '../views';
-import { type CallOptions, KdocsError, callScript } from './client';
+import { type CallOptions, KdocsError, OLD_SCRIPT_MESSAGE, callScript, isCurrentScript } from './client';
 
 export interface KdocsBindingRow {
   event_id: string;
@@ -86,6 +86,8 @@ export interface KdocsStatus {
   missingUnits: string[];
   /** 打不开的单位文件等提示 */
   unitErrors: string[];
+  /** 处理结果或清空指令尚未成功写回表格的单位（会在下次读取时重试） */
+  undelivered: string[];
   baselineDone: boolean;
   /** 当前同步节奏；null 表示尚未判断 */
   pace: KdocsPace | null;
@@ -225,6 +227,7 @@ class EventSync {
       failures: 0,
       missingUnits: [],
       unitErrors: [],
+      undelivered: [],
       baselineDone: binding.baseline_done,
       pace: null,
       nextSyncAt: null,
@@ -351,6 +354,7 @@ class EventSync {
       // 3. 计算并立即写回处理结果、信息区（无变化时不调用）
       await this.computeDesired();
       if (this.oneShot.length || this.pendingWrites().length) await this.send([]);
+      this.status.undelivered = this.undeliveredUnits();
 
       this.status.pace = await this.currentPace();
       this.status.lastRead = {
@@ -412,17 +416,24 @@ class EventSync {
         { action: 'batch', writes: [...shots.map((x) => x.write), ...writes.map((w) => w.write)], reads },
         this.callOpts,
       );
-      if (result.supportsExpect !== true) {
-        throw new KdocsError('脚本版本过旧（需要 1.3.0 及以上）：请从管理端重新下载脚本，在总控文件中整体替换并保存', 'PROTOCOL');
-      }
+      if (!isCurrentScript(result)) throw new KdocsError(OLD_SCRIPT_MESSAGE, 'PROTOCOL');
     } catch (e) {
       this.oneShot.unshift(...shots);
       throw e;
     }
     const callNo = ++this.callNo;
     this.status.calls++;
-    for (const w of writes) this.written.set(w.key, w.json);
-    await Promise.all(shots.map((x) => x.onSent?.(callNo)));
+    // 只有脚本确认写入成功（或条件不符无需写入）才算送达；失败的下次调用重试
+    const st = result.writeStatus!;
+    const retry: typeof shots = [];
+    for (const [i, x] of shots.entries()) {
+      if (st[i] === 'ok' || st[i] === 'skipped') await x.onSent?.(callNo);
+      else retry.push(x);
+    }
+    this.oneShot.push(...retry);
+    for (const [j, w] of writes.entries()) {
+      if (st[shots.length + j] === 'ok') this.written.set(w.key, w.json);
+    }
     return { result, callNo };
   }
 
@@ -433,6 +444,13 @@ class EventSync {
       if (this.written.get(key) !== json) out.push({ key, json, write: w });
     }
     return out;
+  }
+
+  /** 处理结果或清空指令还没写回表格的单位 */
+  private undeliveredUnits(): string[] {
+    const sheets = new Set<string>(this.pendingWrites().map((w) => w.write.sheet));
+    for (const x of this.oneShot) sheets.add(x.write.sheet);
+    return UNITS.filter((u) => sheets.has(u.name)).map((u) => u.name);
   }
 
   /** 条件清空 B6：只有格子里仍是 expect 时才清空；送达前再读到同一内容不重复处理 */
@@ -580,7 +598,8 @@ class EventSync {
           kdocsActor(unit),
           project,
           unit.code,
-          { targetIncreasePp: pp, expectedBidVersion: p.bidVersion, idempotencyKey: `${keyPrefix}${p.bidVersion}`, confirmHighValue: true },
+          // 不自动通过高值确认：与手机端一样需要明确确认，金山表格里无法二次确认，改由工作人员核实后代录
+          { targetIncreasePp: pp, expectedBidVersion: p.bidVersion, idempotencyKey: `${keyPrefix}${p.bidVersion}`, confirmHighValue: false },
           { channel: 'KDOCS' },
         );
         const b = r.body;
@@ -588,6 +607,9 @@ class EventSync {
       } catch (e) {
         if (!(e instanceof BizError)) throw e;
         if (e.code === 'VERSION_CONFLICT') continue;
+        if (e.code === 'HIGH_VALUE_CONFIRM_REQUIRED') {
+          return { status: 'REJECTED', message: `增幅较大（${pp}%），需要工作人员核实：请举手示意，由工作人员在「现场控制」代录`, projectCode: project, toPp: pp };
+        }
         return { status: 'REJECTED', message: e.message, projectCode: project, toPp: pp };
       }
     }
@@ -732,10 +754,10 @@ export class KdocsSyncManager {
   }
 
   /**
-   * 结束本组、暂停、锁定前调用：先把表格中最后的填写读进来。
-   * 金山文档不可用时不阻塞现场操作，返回提示文字。
+   * 现场操作（开始、开放/结束本组、暂停、恢复、锁定）前调用：先把表格中最后的填写读进来。
+   * 返回 null 表示未启用或全部读取成功；否则说明哪些单位没有读到（金山不可用时为全部单位）。
    */
-  async flush(eventId: string, timeoutMs = 10_000): Promise<string | null> {
+  async flush(eventId: string, timeoutMs = 10_000): Promise<{ message: string; units: string[] } | null> {
     const l = this.loops.get(eventId);
     if (!l) return null;
     try {
@@ -743,10 +765,16 @@ export class KdocsSyncManager {
         l.syncNow(),
         new Promise((_, reject) => setTimeout(() => reject(new KdocsError('金山文档同步超时', 'TIMEOUT')), timeoutMs)),
       ]);
-      return null;
     } catch (e) {
-      return `操作前读取金山文档失败（${(e as Error).message}），最后几秒的填写可能未读入，请核对表格`;
+      return {
+        message: `操作前读取金山文档失败（${(e as Error).message}），各单位最后的填写可能未读入`,
+        units: UNITS.map((u) => u.name),
+      };
     }
+    const units = l.status.missingUnits;
+    if (!units.length) return null;
+    const why = l.status.unitErrors.length ? `：${l.status.unitErrors.slice(0, 3).join('；')}` : '';
+    return { message: `操作前有 ${units.length} 家单位的金山表格没有读取成功（${units.join('、')}${why}），这些单位最后的填写可能未读入`, units };
   }
 
   resetWritten(eventId: string): void {

@@ -1,7 +1,7 @@
-import { PROJECT_CODES, UNITS } from '@bidding/shared';
+import { PROJECT_CODES, type ProjectCode, UNITS } from '@bidding/shared';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { AppDeps } from '../app';
-import { withSnapshot } from '../db/pool';
+import { withSnapshot, withTx } from '../db/pool';
 import { bizError } from '../lib/errors';
 import { toIso } from '../lib/time';
 import {
@@ -15,7 +15,7 @@ import {
   wifiInfo,
 } from '../services/auth';
 import { lookupRequest, submitBid } from '../services/bids';
-import { idemScope } from '../services/core';
+import { audit, idemScope } from '../services/core';
 import { createDemoEvent, seedDemo } from '../services/demo';
 import {
   archiveEvent,
@@ -50,6 +50,11 @@ type P = { eventId: string; projectCode: string; unitCode: string; key: string; 
 function attachment(fallback: string, name: string): string {
   return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(name).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())}`;
 }
+
+/** 这些操作前先读取一次金山表格 */
+const KDOCS_FLUSH_BEFORE = new Set(['START', 'OPEN_GROUP', 'RESUME', 'CLOSE_GROUP', 'PAUSE', 'LOCK']);
+/** 这些操作要求全部单位读取成功（否则拦截，可填写原因强制执行） */
+const KDOCS_MUST_READ = new Set(['CLOSE_GROUP', 'LOCK']);
 
 export function registerAdminRoutes(api: FastifyInstance, deps: AppDeps): void {
   const { ctx, hub } = deps;
@@ -167,11 +172,35 @@ export function registerAdminRoutes(api: FastifyInstance, deps: AppDeps): void {
   // ------------------------------------------------------------ 现场控制
 
   api.post<{ Params: P }>('/admin/events/:eventId/projects/:projectCode/control', auth, async (req) => {
-    // 结束本组、暂停、锁定前：先把金山文档中最后几秒的填写读进来
-    const action = body(req).action;
-    const kdocsWarning =
-      action === 'CLOSE_GROUP' || action === 'PAUSE' || action === 'LOCK' ? await deps.kdocs.sync.flush(req.params.eventId) : null;
+    const b = body<{ action?: unknown; kdocsForce?: unknown; kdocsForceReason?: unknown }>(req);
+    const action = String(b.action ?? '');
+    // 状态变化前先把金山表格里的填写按「变化前」的状态读进来：
+    // 结束本组、锁定前不漏掉最后的填写；开始、开放本组、恢复前，未开放或暂停期间填写的数字按当时状态处理（不生效），不会在之后被受理
+    let kdocsWarning: string | null = null;
+    let forced: { message: string; units: string[]; reason: string } | null = null;
+    if (KDOCS_FLUSH_BEFORE.has(action)) {
+      const f = await deps.kdocs.sync.flush(req.params.eventId);
+      if (f && KDOCS_MUST_READ.has(action)) {
+        // 结束本组、锁定：有单位没读到时默认拦截；确需继续，须填写原因强制执行（记入审计）
+        if (b.kdocsForce !== true) {
+          throw bizError('KDOCS_INCOMPLETE', `${f.message}。请排除问题后再点一次；确需继续，请填写原因后强制执行`, { units: f.units });
+        }
+        const reason = typeof b.kdocsForceReason === 'string' ? b.kdocsForceReason.trim() : '';
+        if (!reason) throw bizError('REASON_REQUIRED', '强制执行须填写原因');
+        forced = { ...f, reason };
+      }
+      if (f) kdocsWarning = f.message;
+    }
     const r = await controlProject(ctx, req.params.eventId, actor(req), req.params.projectCode, body(req));
+    if (forced && !r.replayed) {
+      await withTx(ctx.db, (tx) =>
+        audit(tx, req.params.eventId, actor(req), 'KDOCS_FORCE', {
+          projectCode: req.params.projectCode as ProjectCode,
+          reason: forced.reason,
+          details: { action, units: forced.units, message: forced.message },
+        }),
+      );
+    }
     // 状态已变：立即同步一次，把「本组竞标中」等状态写到领导表格，并按新状态调整同步节奏
     deps.kdocs.sync.wake(req.params.eventId);
     return { ...r.body, replayed: r.replayed, ...(kdocsWarning ? { kdocsWarning } : {}) };

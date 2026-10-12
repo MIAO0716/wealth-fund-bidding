@@ -44,6 +44,14 @@ export function normalizeWebhookUrl(raw: unknown): string {
   throw new Error('只支持金山文档（kdocs.cn）的脚本 webhook 链接');
 }
 
+/** 脚本 1.4.0 起逐项返回写入结果（writeStatus），本机据此确认处理结果已写回表格 */
+export const OLD_SCRIPT_MESSAGE =
+  '金山表格里的同步脚本版本过旧（需要 1.4.0 及以上）：请在管理端「金山文档」下载最新脚本，在总控文件的脚本编辑器中全选替换并保存，再点「一键连接」';
+
+export function isCurrentScript(r: KdocsBatchResult): boolean {
+  return Array.isArray(r.writeStatus);
+}
+
 export function isMockUrl(url: string): boolean {
   return url.includes('/mock-kdocs/');
 }

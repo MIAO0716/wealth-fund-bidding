@@ -2,7 +2,7 @@ import { LEADER_STATUS_LABELS, PROJECT_STATUS_NAMES, type LiveRow, type ProjectC
 import { useEffect, useState } from 'react';
 import { KdocsReadBar } from '../../components/KdocsRead';
 import { Modal } from '../../components/ui';
-import { api, errorText, newIdempotencyKey } from '../../lib/api';
+import { ApiError, api, errorText, newIdempotencyKey } from '../../lib/api';
 import { fmtTime, previewTargetWan, wan2 } from '../../lib/format';
 import type { TabProps } from './EventPage';
 
@@ -36,6 +36,14 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
     } catch (e) {
       setMsg({ ok: false, text: errorText(e) });
       reload();
+      // 金山表格有单位没读到：默认拦截结束本组/锁定；核对后可填写原因强制执行（记入审计）
+      if (e instanceof ApiError && e.code === 'KDOCS_INCOMPLETE' && extra.kdocsForce !== true) {
+        const units: string[] = e.details?.units ?? [];
+        setReasonFor({
+          title: `金山表格有 ${units.length} 家没有读取成功（${units.join('、')}）。已电话或现场核对过这些单位的最后报价，仍要继续？请填写原因`,
+          run: (reason) => control(action, { ...extra, kdocsForce: true, kdocsForceReason: reason }),
+        });
+      }
       throw e;
     } finally {
       setBusy(false);

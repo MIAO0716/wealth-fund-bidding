@@ -45,28 +45,30 @@ export type ParsedTarget = { ok: true; pp: number } | { ok: false; reason: strin
 const FULLWIDTH = /[０-９．％]/g;
 
 /**
- * 解析「加到（%）」：35、"35"、"35%"、全角“３５％”；设置了百分比格式的单元格读出 0.35 时按 35 处理。
- * 只接受整数个百分点。
+ * 解析「我要加到」：只接受整数个百分点，例如 40、"40"、"40%"、全角“４０％”都表示 40%。
+ * 不按数值大小猜测含义：数字 1 就是 1%（会因不合规则而不生效），不会被当作 100%；
+ * 0.4 这类小数（格子被设成百分比格式时读出的值）含义不明，直接拒绝并提示。
  */
 export function parseTargetCell(v: unknown): ParsedTarget {
   if (isBlankCell(v)) return { ok: false, reason: '未填写' };
   let n: number;
   if (typeof v === 'number') {
-    n = v > 0 && v < 1.5 ? v * 100 : v;
+    n = v;
   } else if (typeof v === 'string') {
     const s = v
       .replace(FULLWIDTH, (c) => (c === '％' ? '%' : c === '．' ? '.' : String.fromCharCode(c.charCodeAt(0) - 0xfee0)))
       .replace(/\s+/g, '');
     const m = /^(\d+(?:\.\d+)?)(%?)$/.exec(s);
-    if (!m) return { ok: false, reason: `无法识别「${String(v).slice(0, 20)}」，请填写数字，如 35` };
+    if (!m) return { ok: false, reason: `无法识别「${String(v).slice(0, 20)}」，请填写整数，如 40` };
     n = Number(m[1]);
   } else {
-    return { ok: false, reason: '无法识别，请填写数字，如 35' };
+    return { ok: false, reason: '无法识别，请填写整数，如 40' };
   }
-  const rounded = Math.round(n * 1e6) / 1e6;
-  if (!Number.isFinite(rounded) || !Number.isInteger(rounded)) return { ok: false, reason: `「${String(v)}」不是整数个百分点` };
-  if (rounded <= 0 || rounded > 1000) return { ok: false, reason: `「${String(v)}」超出范围` };
-  return { ok: true, pp: rounded };
+  if (!Number.isFinite(n) || !Number.isInteger(n)) {
+    return { ok: false, reason: `「${String(v)}」不是整数：请直接填写整数，如 40（不要把格子设成百分比格式）` };
+  }
+  if (n <= 0 || n > 1000) return { ok: false, reason: `「${String(v)}」超出范围` };
+  return { ok: true, pp: n };
 }
 
 /**
@@ -128,6 +130,8 @@ export interface KdocsBatchResult {
   skipped?: number;
   /** 1.3 起：支持条件写入与格式 */
   supportsExpect?: boolean;
+  /** 1.4 起：与 writes 一一对应的写入结果 */
+  writeStatus?: Array<'ok' | 'skipped' | 'error'>;
   formatted?: number;
   formatErrors?: string[];
   errors?: string[];
