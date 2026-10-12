@@ -121,7 +121,9 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   // 大屏自动切到首轮：三组 16 家
   await expect(screen.getByText('会前首轮结果', { exact: false })).toBeVisible();
   await expect(screen.locator('.s-row')).toHaveCount(16);
-  await expect(screen.getByText('16/16家已录入')).toBeVisible();
+  // 首轮大屏只保留「理财 · 会前首轮结果」，不显示发布时间、录入数和下方说明
+  await expect(screen.getByText('家已录入')).toHaveCount(0);
+  await expect(screen.getByText('首轮为会前上报数据', { exact: false })).toHaveCount(0);
   await shot(screen, 'screen-first-round');
 
   // ---------------------------------------------------------- 领导认领底标
@@ -140,6 +142,8 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await expect(admin.locator('.chip', { hasText: '竞标中' })).toBeVisible();
   await expect(admin.locator('.board-group.open').first()).toBeVisible();
   await expect(admin.getByText('第1组竞标中')).toBeVisible();
+  // 现场控制显示网络延迟
+  await expect(admin.getByText(/网络延迟 \d+ ms/)).toBeVisible();
 
   // 大屏自动切到实时榜：只展示进行中的第一组（6 家），带目标金额
   await expect(screen.locator('.s-panel.open')).toHaveCount(1);

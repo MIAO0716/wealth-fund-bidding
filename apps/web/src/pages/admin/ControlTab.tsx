@@ -1,6 +1,7 @@
 import { LEADER_STATUS_LABELS, PROJECT_STATUS_NAMES, type LiveRow, type ProjectCode, type ScreenMode } from '@bidding/shared';
 import { useEffect, useState } from 'react';
 import { KdocsReadBar } from '../../components/KdocsRead';
+import { NetLatency } from '../../components/NetLatency';
 import { StepPicker } from '../../components/StepPicker';
 import { Modal } from '../../components/ui';
 import { ApiError, api, errorText, newIdempotencyKey } from '../../lib/api';
@@ -116,6 +117,9 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
           </button>
         ))}
         {!isCurrent && <span className="chip grey">非当前专场</span>}
+        <span style={{ marginLeft: 'auto' }}>
+          <NetLatency />
+        </span>
       </div>
       {msg && (
         <div className={`notice ${msg.ok ? 'success' : ''}`} style={{ marginBottom: 12 }}>

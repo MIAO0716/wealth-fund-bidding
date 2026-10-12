@@ -2020,11 +2020,14 @@ textarea {
     animation: none;
   }
 }
+/* 结果大屏：首轮、加码两列左移，加码与最终之间留足间距（最终增幅可能是 3 位数） */
 .s-result-row {
-  grid-template-columns: 36px 1fr 70px 56px 84px;
+  grid-template-columns: 30px minmax(0, 1fr) 54px 60px 104px;
+  column-gap: 10px;
 }
 .s-result-row.with-target {
-  grid-template-columns: 34px 1fr 62px 50px 76px 96px;
+  grid-template-columns: 30px minmax(0, 1fr) 54px 60px 104px 92px;
+  column-gap: 10px;
 }
 .s-result-row .target {
   text-align: right;
@@ -2169,4 +2172,23 @@ textarea {
   font-size: 32px;
   letter-spacing: 3px;
   line-height: 1.2;
+}
+
+/* 首轮、结果大屏底部只保留连接状态 */
+.s-foot.slim {
+  height: 44px;
+  margin-top: 10px;
+  padding-top: 6px;
+  justify-content: flex-end;
+  border-top: 0;
+}
+.s-result-row .name {
+  white-space: nowrap;
+  overflow: hidden;
+}
+.s-result-row .name .s-badge {
+  font-size: 12px;
+  padding: 2px 6px;
+  margin-left: 6px !important;
+  letter-spacing: 0;
 }

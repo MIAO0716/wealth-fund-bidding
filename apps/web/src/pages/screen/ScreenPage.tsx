@@ -471,17 +471,7 @@ function FirstRoundScreen({ eventId, project }: { eventId: string; project: Proj
       <Head
         title={data.event.name || '现场竞标'}
         center={<span className={`s-project ${b.projectCode}`}>{PROJECT_NAMES[b.projectCode]}专场</span>}
-        sub={
-          <>
-            <span>{PROJECT_NAMES[b.projectCode]} · 会前首轮结果</span>
-            {b.published && <span>发布于 {fmtTime(b.publishedAt)}</span>}
-            {b.published && (
-              <span>
-                {b.completeCount}/{b.totalCount}家已录入
-              </span>
-            )}
-          </>
-        }
+        sub={<span>{PROJECT_NAMES[b.projectCode]} · 会前首轮结果</span>}
         right={
           <>
             <span className="s-pill">{b.published ? '首轮已发布' : '待发布'}</span>
@@ -539,11 +529,7 @@ function FirstRoundScreen({ eventId, project }: { eventId: string; project: Proj
           ))}
         </div>
       )}
-      <div className="s-foot">
-        <div className="s-feed-label">说明</div>
-        <div className="s-feed">
-          <span className="s-feed-item">首轮为会前上报数据，现场加码从首轮起算，首轮快照不会被覆盖</span>
-        </div>
+      <div className="s-foot slim">
         <ConnInfo conn={conn} lastSyncAt={lastSyncAt} />
       </div>
     </Stage>
@@ -613,11 +599,7 @@ function ResultsScreen({ eventId }: { eventId: string }) {
           );
         })}
       </div>
-      <div className="s-foot" style={{ height: 60 }}>
-        <div className="s-feed-label">说明</div>
-        <div className="s-feed">
-          <span className="s-feed-item">以上为现场竞标结果，与活动结束后的实际业务达标考核区分</span>
-        </div>
+      <div className="s-foot slim">
         <ConnInfo conn={conn} lastSyncAt={lastSyncAt} />
       </div>
     </Stage>
