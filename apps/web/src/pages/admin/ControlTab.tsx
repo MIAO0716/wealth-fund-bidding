@@ -1,4 +1,13 @@
-import { LEADER_STATUS_LABELS, PROJECT_STATUS_NAMES, type LiveRow, type ProjectCode, type ScreenMode } from '@bidding/shared';
+import {
+  BID_SOUNDS,
+  CHAMPION_SOUNDS,
+  GROUP_START_SOUNDS,
+  LEADER_STATUS_LABELS,
+  PROJECT_STATUS_NAMES,
+  type LiveRow,
+  type ProjectCode,
+  type ScreenMode,
+} from '@bidding/shared';
 import { useEffect, useState } from 'react';
 import { KdocsReadBar } from '../../components/KdocsRead';
 import { NetLatency } from '../../components/NetLatency';
@@ -6,7 +15,7 @@ import { StepPicker } from '../../components/StepPicker';
 import { Modal } from '../../components/ui';
 import { ApiError, api, errorText, newIdempotencyKey } from '../../lib/api';
 import { fmtTime, previewTargetWan, wan0 } from '../../lib/format';
-import { playBid, playChampion, unlockAudio } from '../../lib/sound';
+import { playBidSound, playChampionSound, playGroupStartSound, unlockAudio } from '../../lib/sound';
 import type { TabProps } from './EventPage';
 
 type Action = 'START' | 'PAUSE' | 'RESUME' | 'OPEN_GROUP' | 'CLOSE_GROUP' | 'LOCK';
@@ -55,10 +64,11 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
   };
   const safe = (f: () => Promise<void>) => () => void f().catch(() => {});
 
-  const sound = state.event.config.screenSound !== false;
-  const setSound = async (on: boolean) => {
+  const cfg = state.event.config;
+  const sound = cfg.screenSound !== false;
+  const setConfig = async (patch: Partial<typeof cfg>) => {
     try {
-      await api.patch(`${base}/config`, { screenSound: on });
+      await api.patch(`${base}/config`, patch);
       reload();
     } catch (e) {
       setMsg({ ok: false, text: errorText(e) });
@@ -159,11 +169,12 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
                 ['FIRST_ROUND', '首轮结果'],
                 ['LIVE', '实时竞标'],
                 ['RESULTS', '最终结果'],
+                ['AWARDS', '标王颁奖'],
               ] as [ScreenMode, string][]
             ).map(([m, label]) => (
               <button
                 key={m}
-                className={`btn ${state.event.screenMode === m && state.event.screenProject === project ? 'btn-gold' : ''}`}
+                className={`btn ${state.event.screenMode === m && (m === 'RESULTS' || m === 'AWARDS' || state.event.screenProject === project) ? 'btn-gold' : ''}`}
                 onClick={() => void screenMode(m)}
               >
                 {label}
@@ -173,21 +184,46 @@ export function ControlTab({ eventId, state, reload }: TabProps) {
           <p className="small muted">大屏打开「/screen」链接时自动跟随此处切换。</p>
           <div className="a-row" style={{ marginTop: 8 }}>
             <span>大屏声音：</span>
-            <button className={`btn btn-sm ${sound ? 'btn-gold' : ''}`} onClick={() => void setSound(true)} disabled={sound}>
+            <button className={`btn btn-sm ${sound ? 'btn-gold' : ''}`} onClick={() => void setConfig({ screenSound: true })} disabled={sound}>
               开
             </button>
-            <button className={`btn btn-sm ${!sound ? 'btn-gold' : ''}`} onClick={() => void setSound(false)} disabled={!sound}>
+            <button className={`btn btn-sm ${!sound ? 'btn-gold' : ''}`} onClick={() => void setConfig({ screenSound: false })} disabled={!sound}>
               关
             </button>
-            <button className="btn btn-sm" onClick={() => (unlockAudio(), setTimeout(playBid, 60))} title="在本电脑上试听">
-              试听加码音
-            </button>
-            <button className="btn btn-sm" onClick={() => (unlockAudio(), setTimeout(playChampion, 60))} title="在本电脑上试听">
-              试听标王音效
-            </button>
+          </div>
+          <div className="sound-grid">
+            {(
+              [
+                ['soundGroupStart', '开放本组', GROUP_START_SOUNDS, playGroupStartSound],
+                ['soundBid', '普通加码', BID_SOUNDS, playBidSound],
+                ['soundChampion', '新标王候选', CHAMPION_SOUNDS, playChampionSound],
+              ] as const
+            ).map(([key, label, options, preview]) => (
+              <label key={key} className="sound-row">
+                <span>{label}</span>
+                <select value={cfg[key]} onChange={(e) => void setConfig({ [key]: e.target.value })} aria-label={`${label}音效`}>
+                  {Object.entries(options).map(([id, name]) => (
+                    <option key={id} value={id}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    unlockAudio();
+                    setTimeout(() => preview(cfg[key]), 60);
+                  }}
+                >
+                  试听
+                </button>
+              </label>
+            ))}
           </div>
           <p className="small muted" style={{ marginBottom: 0 }}>
-            普通加码响一声「叮」；出现新的标王候选（≥30% 且组内唯一第一）时播放标王音效。投屏电脑需在大屏页面点一下（如「全屏」）后浏览器才允许出声。
+            开放每组时播放开组音效；普通加码响提示音；出现新的标王候选（≥30% 且组内唯一第一）时播放标王音效并在大屏中央显示爆炸特效约 5 秒。试听在本电脑播放；投屏电脑需在大屏页面点一下（如「全屏」）后浏览器才允许出声。
           </p>
         </div>
       </div>

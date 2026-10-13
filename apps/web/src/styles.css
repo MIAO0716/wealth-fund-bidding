@@ -2485,3 +2485,335 @@ textarea {
 .card-grid:has(.leader-page) {
   grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
 }
+
+/* ---------------------------------------------------------------- 管理端：音效选择 */
+.sound-grid {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 6px;
+}
+.sound-row {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 220px) auto;
+  gap: 8px;
+  align-items: center;
+}
+.sound-row span {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+/* ---------------------------------------------------------------- 大屏：新标王候选爆炸特效 */
+.s-burst {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: burstOut 5.5s ease forwards;
+}
+@keyframes burstOut {
+  0%,
+  86% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.s-burst-flash {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 50%, rgba(255, 244, 205, 0.95) 0%, rgba(226, 184, 92, 0.55) 18%, rgba(58, 6, 12, 0) 55%);
+  animation: burstFlash 1.4s ease-out forwards;
+}
+@keyframes burstFlash {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  12% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0.25;
+    transform: scale(1.4);
+  }
+}
+.s-burst-rays {
+  position: absolute;
+  width: 1500px;
+  height: 1500px;
+  border-radius: 50%;
+  background: repeating-conic-gradient(from 0deg, rgba(255, 228, 150, 0.32) 0deg 6deg, rgba(255, 228, 150, 0) 6deg 18deg);
+  mask-image: radial-gradient(circle, #000 0%, #000 30%, transparent 68%);
+  -webkit-mask-image: radial-gradient(circle, #000 0%, #000 30%, transparent 68%);
+  animation: burstRays 5.5s linear forwards;
+}
+@keyframes burstRays {
+  0% {
+    opacity: 0;
+    transform: scale(0.2) rotate(0deg);
+  }
+  10% {
+    opacity: 1;
+    transform: scale(1) rotate(10deg);
+  }
+  100% {
+    opacity: 0.6;
+    transform: scale(1.1) rotate(60deg);
+  }
+}
+.s-burst-ring {
+  position: absolute;
+  width: 220px;
+  height: 220px;
+  border-radius: 50%;
+  border: 10px solid rgba(255, 233, 170, 0.9);
+  animation: burstRing 1.2s cubic-bezier(0.1, 0.7, 0.3, 1) forwards;
+}
+.s-burst-ring.r2 {
+  border-width: 5px;
+  animation-delay: 0.18s;
+  opacity: 0;
+}
+@keyframes burstRing {
+  0% {
+    opacity: 1;
+    transform: scale(0.2);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(7);
+  }
+}
+.s-spark {
+  position: absolute;
+  width: var(--s);
+  height: var(--s);
+  border-radius: 50%;
+  background: radial-gradient(circle, #fffbe8, #f3cf6f 45%, rgba(226, 184, 92, 0) 72%);
+  opacity: 0;
+  animation: spark 1.6s cubic-bezier(0.15, 0.8, 0.3, 1) forwards;
+}
+.s-spark.red {
+  background: radial-gradient(circle, #fff1f1, #ff5a4f 45%, rgba(255, 90, 79, 0) 72%);
+}
+@keyframes spark {
+  0% {
+    opacity: 1;
+    transform: rotate(var(--a)) translateX(0) scale(1.3);
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: rotate(var(--a)) translateX(var(--d)) scale(0.4);
+  }
+}
+.s-burst-card {
+  position: relative;
+  text-align: center;
+  padding: 34px 90px 30px;
+  border-radius: 34px;
+  background: linear-gradient(180deg, #fbe6ad, var(--gold) 60%, #c8952f);
+  color: var(--red-night);
+  border: 4px solid #fff3d4;
+  box-shadow: 0 0 0 10px rgba(226, 184, 92, 0.25), 0 0 140px rgba(255, 210, 120, 0.85);
+  animation: burstCard 0.9s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+@keyframes burstCard {
+  0% {
+    opacity: 0;
+    transform: scale(0.2) rotate(-6deg);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.12) rotate(1deg);
+  }
+  100% {
+    transform: scale(1) rotate(0);
+  }
+}
+.s-burst-kicker {
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: 10px;
+  color: #8e1020;
+}
+.s-burst-unit {
+  font-size: 130px;
+  font-weight: 900;
+  letter-spacing: 26px;
+  text-indent: 26px;
+  line-height: 1.15;
+  margin-top: 6px;
+  text-shadow: 0 4px 0 rgba(255, 255, 255, 0.35);
+}
+.s-burst-pp {
+  font-size: 96px;
+  font-weight: 900;
+  line-height: 1;
+  color: #b30f26;
+}
+.s-burst-pp span {
+  font-size: 0.5em;
+  margin-left: 4px;
+}
+
+/* ---------------------------------------------------------------- 标王颁奖大屏 */
+.s-awards {
+  flex: 1;
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  gap: 22px;
+  margin-top: 16px;
+  min-height: 0;
+  position: relative;
+  z-index: 1;
+}
+.s-award-row {
+  display: grid;
+  grid-template-columns: 120px repeat(3, 1fr);
+  gap: 22px;
+  min-height: 0;
+}
+.s-award-card {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border-radius: 24px;
+  border: 2px solid var(--gold);
+  background: radial-gradient(ellipse at 50% 0%, rgba(255, 220, 140, 0.32), rgba(58, 6, 12, 0.55) 70%);
+  box-shadow: 0 0 0 1px rgba(226, 184, 92, 0.35), 0 0 60px rgba(226, 184, 92, 0.25);
+  animation: awardIn 0.9s cubic-bezier(0.2, 1.3, 0.4, 1) both;
+}
+.s-award-card.pending,
+.s-award-card.none {
+  border-color: rgba(226, 184, 92, 0.35);
+  background: rgba(58, 6, 12, 0.45);
+  box-shadow: none;
+}
+@keyframes awardIn {
+  0% {
+    opacity: 0;
+    transform: translateY(40px) scale(0.85);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+.s-award-shine {
+  position: absolute;
+  top: 0;
+  left: -60%;
+  width: 40%;
+  height: 100%;
+  background: linear-gradient(100deg, rgba(255, 255, 255, 0), rgba(255, 246, 214, 0.35), rgba(255, 255, 255, 0));
+  transform: skewX(-18deg);
+  animation: awardShine 4.5s ease-in-out 1.5s infinite;
+}
+@keyframes awardShine {
+  0% {
+    left: -60%;
+  }
+  40%,
+  100% {
+    left: 130%;
+  }
+}
+.s-award-trophy {
+  width: 92px;
+  height: 92px;
+  filter: drop-shadow(0 6px 18px rgba(255, 210, 120, 0.55));
+}
+.s-award-group {
+  font-size: 22px;
+  letter-spacing: 4px;
+  color: var(--gold-soft);
+}
+.s-award-unit {
+  font-size: 76px;
+  font-weight: 900;
+  letter-spacing: 18px;
+  text-indent: 18px;
+  color: var(--gold);
+  line-height: 1.1;
+  text-shadow: 0 0 30px rgba(226, 184, 92, 0.45);
+}
+.s-award-unit.multi {
+  font-size: 52px;
+  letter-spacing: 6px;
+  text-indent: 6px;
+}
+.s-award-pp {
+  font-size: 64px;
+  font-weight: 900;
+  color: var(--ivory);
+  line-height: 1;
+}
+.s-award-pp span {
+  font-size: 0.5em;
+  margin-left: 2px;
+}
+.s-award-meta {
+  display: flex;
+  gap: 18px;
+  font-size: 20px;
+  color: var(--gold-soft);
+}
+.s-award-wait {
+  font-size: 34px;
+  letter-spacing: 6px;
+  color: rgba(246, 227, 180, 0.75);
+}
+.s-award-note {
+  font-size: 18px;
+  color: rgba(246, 227, 180, 0.55);
+}
+.s-confetti {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+.s-confetti i {
+  position: absolute;
+  top: -30px;
+  border-radius: 2px;
+  background: var(--gold);
+  opacity: 0.8;
+  animation-name: confettiFall;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+.s-confetti i.red {
+  background: #ff5a4f;
+}
+@keyframes confettiFall {
+  0% {
+    transform: translateY(0) rotate(0deg);
+  }
+  100% {
+    transform: translateY(1150px) rotate(720deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .s-burst,
+  .s-burst *,
+  .s-confetti i,
+  .s-award-card,
+  .s-award-shine {
+    animation: none !important;
+  }
+}

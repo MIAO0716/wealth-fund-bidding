@@ -149,6 +149,9 @@ function publicEvent(ev: ReturnType<typeof toSummary>) {
     screenMode: ev.screenMode,
     screenProject: ev.screenProject,
     screenSound: ev.config.screenSound,
+    soundBid: ev.config.soundBid,
+    soundChampion: ev.config.soundChampion,
+    soundGroupStart: ev.config.soundGroupStart,
   };
 }
 

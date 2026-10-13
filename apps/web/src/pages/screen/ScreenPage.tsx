@@ -10,12 +10,12 @@ import {
   type ScreenMode,
   isProjectCode,
 } from '@bidding/shared';
-import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { type CSSProperties, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { DemoBadge } from '../../components/ui';
 import { api, errorText, takeHashParam } from '../../lib/api';
 import { fenToYi2, fmtTime, increasePct2, wan0 } from '../../lib/format';
-import { audioReady, playBid, playChampion, unlockAudio } from '../../lib/sound';
+import { audioReady, playBidSound, playChampionSound, playGroupStartSound, unlockAudio } from '../../lib/sound';
 import { CONN_LABEL, type ConnState, useRealtime } from '../../lib/realtime';
 
 interface PublicEvent {
@@ -27,7 +27,24 @@ interface PublicEvent {
   screenProject: ProjectCode;
   /** 大屏声音（管理端控制） */
   screenSound?: boolean;
+  soundBid?: string;
+  soundChampion?: string;
+  soundGroupStart?: string;
 }
+
+/** 大屏声音设置（来自管理端配置） */
+interface SoundCfg {
+  on: boolean;
+  bid?: string;
+  champion?: string;
+  groupStart?: string;
+}
+const soundOf = (e?: PublicEvent): SoundCfg => ({
+  on: e?.screenSound !== false,
+  bid: e?.soundBid,
+  champion: e?.soundChampion,
+  groupStart: e?.soundGroupStart,
+});
 
 interface LiveSnapshot {
   seq: number;
@@ -86,7 +103,20 @@ export function ScreenPage({ mode }: { mode: ScreenMode | 'follow' }) {
   return mode === 'follow' ? <FollowScreen eventId={eventId} /> : <FixedScreen eventId={eventId} mode={mode} />;
 }
 
+/** 开放本组（开始竞标）时敲锣：监听实时消息，任何大屏模式下都会响 */
+function useGroupStartSound(eventId: string) {
+  const base = `/api/v1/screen/events/${eventId}`;
+  const cfgRef = useRef<SoundCfg>({ on: false });
+  const onMessage = (m: RealtimeMessage) => {
+    if (m.type === 'GROUP_STATUS' && m.data.status === 'OPEN' && cfgRef.current.on) playGroupStartSound(cfgRef.current.groupStart);
+  };
+  const live = useRealtime<LiveSnapshot>(`${base}/live`, `${base}/stream`, onMessage);
+  cfgRef.current = soundOf(live.data?.event);
+  return live;
+}
+
 function FixedScreen({ eventId, mode }: { eventId: string; mode: ScreenMode }) {
+  useGroupStartSound(eventId);
   const [params] = useSearchParams();
   const q = params.get('project');
   const project = q && isProjectCode(q) ? q : null;
@@ -95,8 +125,7 @@ function FixedScreen({ eventId, mode }: { eventId: string; mode: ScreenMode }) {
 
 /** 跟随管理端切换的大屏模式 */
 function FollowScreen({ eventId }: { eventId: string }) {
-  const base = `/api/v1/screen/events/${eventId}`;
-  const { data } = useRealtime<LiveSnapshot>(`${base}/live`, `${base}/stream`);
+  const { data } = useGroupStartSound(eventId);
   if (!data) return <div className="screen-key-page">正在加载…</div>;
   return <ModeView key={`${data.event.screenMode}-${data.event.screenProject}`} eventId={eventId} mode={data.event.screenMode} project={data.event.screenProject} />;
 }
@@ -104,6 +133,7 @@ function FollowScreen({ eventId }: { eventId: string }) {
 function ModeView({ eventId, mode, project }: { eventId: string; mode: ScreenMode; project: ProjectCode | null }) {
   if (mode === 'FIRST_ROUND') return <FirstRoundScreen eventId={eventId} project={project} />;
   if (mode === 'RESULTS') return <ResultsScreen eventId={eventId} />;
+  if (mode === 'AWARDS') return <AwardsScreen eventId={eventId} />;
   return <LiveScreen eventId={eventId} project={project} />;
 }
 
@@ -131,7 +161,7 @@ function Stage({ children, isDemo }: { children: ReactNode; isDemo?: boolean }) 
 }
 
 /** 大屏工具：全屏按钮、声音解锁提示、领导在线数。声音开关在管理端「现场控制」 */
-function useScreenTools(eventId: string, soundOn: boolean) {
+function useScreenTools(eventId: string, sound: SoundCfg) {
   const [ready, setReady] = useState(audioReady());
   const [presence, setPresence] = useState<{ online: number; total: number } | null>(null);
   // 浏览器要求页面先有一次点击或按键才允许播放声音
@@ -162,8 +192,9 @@ function useScreenTools(eventId: string, soundOn: boolean) {
       clearInterval(t);
     };
   }, [eventId]);
-  const soundRef = useRef(soundOn);
-  soundRef.current = soundOn;
+  const soundRef = useRef(sound);
+  soundRef.current = sound;
+  const soundOn = sound.on;
   const tools = (
     <div className="s-tools">
       {presence && (
@@ -183,8 +214,8 @@ function useScreenTools(eventId: string, soundOn: boolean) {
   );
   return {
     tools,
-    bidSound: () => soundRef.current && playBid(),
-    championSound: () => soundRef.current && playChampion(),
+    bidSound: () => soundRef.current.on && playBidSound(soundRef.current.bid),
+    championSound: () => soundRef.current.on && playChampionSound(soundRef.current.champion),
   };
 }
 
@@ -232,11 +263,66 @@ function focusGroupNo(p: ProjectView): number {
 }
 
 const TRANSITION_MS = 900;
+/** 新标王特效显示时长：比普通提示略长，又不至于影响后续竞标 */
+const CHAMPION_BURST_MS = 5500;
+
+/** 新标王候选：金色爆炸光芒 + 粒子四散 + 大号文字 */
+function ChampionBurst({ group, unit, pp }: { group: string; unit: string; pp: number | null }) {
+  // 粒子方向与距离固定随机一次
+  const sparks = useRef(
+    Array.from({ length: 36 }, (_, i) => ({
+      angle: (360 / 36) * i + (Math.random() * 8 - 4),
+      dist: 380 + Math.random() * 360,
+      size: 8 + Math.random() * 14,
+      delay: Math.random() * 0.15,
+      hue: Math.random() < 0.7 ? 'gold' : 'red',
+    })),
+  ).current;
+  return (
+    <div className="s-burst" aria-live="polite">
+      <div className="s-burst-flash" />
+      <div className="s-burst-rays" />
+      <div className="s-burst-ring" />
+      <div className="s-burst-ring r2" />
+      {sparks.map((p, i) => (
+        <span
+          key={i}
+          className={`s-spark ${p.hue}`}
+          style={
+            {
+              '--a': `${p.angle}deg`,
+              '--d': `${p.dist}px`,
+              '--s': `${p.size}px`,
+              animationDelay: `${0.25 + p.delay}s`,
+            } as CSSProperties
+          }
+        />
+      ))}
+      <div className="s-burst-card">
+        <div className="s-burst-kicker">{group} · 新标王候选</div>
+        <div className="s-burst-unit">{unit}</div>
+        {pp !== null && (
+          <div className="s-burst-pp num">
+            {pp}
+            <span>%</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function LiveScreen({ eventId, project }: { eventId: string; project: ProjectCode | null }) {
   const base = `/api/v1/screen/events/${eventId}`;
   const [flash, setFlash] = useState<Record<string, number>>({});
-  const [toast, setToast] = useState<{ id: number; text: string; champion?: boolean } | null>(null);
+  const [toast, setToast] = useState<{ id: number; text: string } | null>(null);
+  // 新标王候选：大号居中 + 爆炸特效，约 5.5 秒后自动消失（不影响领导继续加码）
+  const [burstInfo, setBurstInfo] = useState<{ id: number; group: string; unit: string; pp: number | null } | null>(null);
+  useEffect(() => {
+    if (!burstInfo) return;
+    const t = setTimeout(() => setBurstInfo(null), CHAMPION_BURST_MS);
+    return () => clearTimeout(t);
+  }, [burstInfo?.id]);
   // 收到加码后等快照更新再决定播放哪种声音（是否出现新的标王候选）
   const pendingBid = useRef(false);
   const onMessage = (m: RealtimeMessage) => {
@@ -246,7 +332,7 @@ function LiveScreen({ eventId, project }: { eventId: string; project: ProjectCod
     }
   };
   const { data, conn, lastSyncAt } = useRealtime<LiveSnapshot>(`${base}/live${project ? `?project=${project}` : ''}`, `${base}/stream`, onMessage);
-  const { tools, bidSound, championSound } = useScreenTools(eventId, data?.event.screenSound !== false);
+  const { tools, bidSound, championSound } = useScreenTools(eventId, soundOf(data?.event));
 
   // 组切换转场：旧组淡出左移，新组从右侧滑入
   const focusNo = data?.published ? focusGroupNo(data.project) : null;
@@ -278,7 +364,7 @@ function LiveScreen({ eventId, project }: { eventId: string; project: ProjectCod
       const names = g.rows.filter((r) => g.topUnitCodes.includes(r.unitCode)).map((r) => r.unitName).join('、');
       if (prevChamp !== undefined && champ && champ !== prevChamp && live) {
         newChampion = true;
-        setToast({ id: Date.now(), text: `新标王候选：${names} ${g.topPp}%`, champion: true });
+        setBurstInfo({ id: Date.now(), group: g.name, unit: names, pp: g.topPp });
       } else if (prev !== undefined && prev !== key && live && g.topUnitCodes.length) {
         setToast({ id: Date.now(), text: `${g.name}领先：${names} ${g.topPp}%` });
       }
@@ -321,10 +407,11 @@ function LiveScreen({ eventId, project }: { eventId: string; project: ProjectCod
       />
       <OfflineAlert conn={conn} />
       {toast && (
-        <div className={`s-toast ${toast.champion ? 'champion' : ''}`} key={toast.id}>
+        <div className="s-toast" key={toast.id}>
           {toast.text}
         </div>
       )}
+      {burstInfo && <ChampionBurst key={burstInfo.id} group={burstInfo.group} unit={burstInfo.unit} pp={burstInfo.pp} />}
       {!data.published ? (
         <div className="s-center-msg">
           {PROJECT_NAMES[p.projectCode]}首轮结果待发布
@@ -459,7 +546,7 @@ function FocusPanel({ g, flash, className }: { g: GroupBoard; flash: Record<stri
 
 function FirstRoundScreen({ eventId, project }: { eventId: string; project: ProjectCode | null }) {
   const base = `/api/v1/screen/events/${eventId}`;
-  const { tools } = useScreenTools(eventId, false);
+  const { tools } = useScreenTools(eventId, { on: false });
   // 未指定项目时以当前专场为准
   const live = useRealtime<LiveSnapshot>(project ? null : `${base}/live`, project ? null : `${base}/stream`);
   const projectCode = project ?? live.data?.event.currentProject ?? null;
@@ -543,7 +630,7 @@ function FirstRoundScreen({ eventId, project }: { eventId: string; project: Proj
 
 function ResultsScreen({ eventId }: { eventId: string }) {
   const base = `/api/v1/screen/events/${eventId}`;
-  const { tools } = useScreenTools(eventId, false);
+  const { tools } = useScreenTools(eventId, { on: false });
   const { data, conn, lastSyncAt } = useRealtime<ResultsSnapshot>(`${base}/results`, `${base}/stream`);
   if (!data) return <Stage>{null}</Stage>;
   return (
@@ -613,6 +700,135 @@ function ResultsScreen({ eventId }: { eventId: string }) {
                   {pr.status === 'DRAFT' ? '待开始' : '竞标进行中，待锁定后公布'}
                 </div>
               )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="s-foot slim">
+        <ConnInfo conn={conn} lastSyncAt={lastSyncAt} />
+      </div>
+    </Stage>
+  );
+}
+
+// ------------------------------------------------------------------ 标王颁奖大屏
+
+function Trophy() {
+  return (
+    <svg className="s-award-trophy" viewBox="0 0 64 64" aria-hidden="true">
+      <defs>
+        <linearGradient id="tg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#fff1c4" />
+          <stop offset="0.5" stopColor="#e2b85c" />
+          <stop offset="1" stopColor="#a87a22" />
+        </linearGradient>
+      </defs>
+      <path d="M18 8h28v10c0 9-6 16-14 16s-14-7-14-16V8z" fill="url(#tg)" />
+      <path d="M18 12H9c0 8 4 13 11 14M46 12h9c0 8-4 13-11 14" fill="none" stroke="url(#tg)" strokeWidth="3.5" strokeLinecap="round" />
+      <rect x="28" y="33" width="8" height="10" fill="url(#tg)" />
+      <rect x="20" y="43" width="24" height="6" rx="2" fill="url(#tg)" />
+      <rect x="16" y="49" width="32" height="7" rx="2" fill="url(#tg)" />
+      <path d="M32 13l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4-3.9-3.8 5.4-.8z" fill="#fff8e6" opacity=".9" />
+    </svg>
+  );
+}
+
+function AwardsScreen({ eventId }: { eventId: string }) {
+  const base = `/api/v1/screen/events/${eventId}`;
+  const { data, conn, lastSyncAt } = useRealtime<ResultsSnapshot>(`${base}/results`, `${base}/stream`);
+  const { tools, championSound } = useScreenTools(eventId, soundOf(data?.event));
+  // 打开颁奖页时播放一次标王音效（需投屏电脑已点击过页面）
+  const played = useRef(false);
+  useEffect(() => {
+    if (!data || played.current) return;
+    played.current = true;
+    setTimeout(() => championSound(), 600);
+  }, [data]);
+  // 彩带：位置与速度随机一次
+  const confetti = useRef(
+    Array.from({ length: 46 }, () => ({
+      left: Math.random() * 100,
+      delay: Math.random() * 6,
+      dur: 6 + Math.random() * 6,
+      size: 8 + Math.random() * 10,
+      hue: Math.random() < 0.6 ? 'gold' : 'red',
+    })),
+  ).current;
+  if (!data) return <Stage>{null}</Stage>;
+  let order = 0;
+  return (
+    <Stage isDemo={data.event.isDemo}>
+      <div className="s-confetti" aria-hidden="true">
+        {confetti.map((c, i) => (
+          <i
+            key={i}
+            className={c.hue}
+            style={{ left: `${c.left}%`, width: c.size, height: c.size * 0.45, animationDelay: `${c.delay}s`, animationDuration: `${c.dur}s` }}
+          />
+        ))}
+      </div>
+      <Head
+        title={data.event.name || '现场竞标'}
+        sub={<span>理财、基金 · 各组标王</span>}
+        center={<span className="s-project">标王荣誉榜</span>}
+        right={tools}
+      />
+      <OfflineAlert conn={conn} />
+      <div className="s-awards">
+        {(['wealth', 'fund'] as ProjectCode[]).map((pc) => {
+          const pr = data.projects[pc];
+          return (
+            <div className="s-award-row" key={pc}>
+              <div className="s-result-label">{pr.name}</div>
+              {[1, 2, 3].map((groupNo) => {
+                const g = pr.groups.find((x) => x.groupNo === groupNo);
+                const idx = order++;
+                const style = { animationDelay: `${0.2 + idx * 0.25}s` };
+                const groupName = g?.name ?? ['第一组', '第二组', '第三组'][groupNo - 1];
+                if (!pr.locked || !g) {
+                  return (
+                    <div className="s-award-card pending" key={groupNo} style={style}>
+                      <div className="s-award-group">
+                        {pr.name} · {groupName}
+                      </div>
+                      <div className="s-award-wait">待锁定后揭晓</div>
+                    </div>
+                  );
+                }
+                const champs = g.rows.filter((r) => r.isTop);
+                if (g.leaderStatus !== 'CHAMPION_CANDIDATE' && g.leaderStatus !== 'TIED_PENDING') {
+                  return (
+                    <div className="s-award-card none" key={groupNo} style={style}>
+                      <div className="s-award-group">
+                        {pr.name} · {groupName}
+                      </div>
+                      <div className="s-award-wait">本组暂无标王</div>
+                      <div className="s-award-note">最高增幅未达 30% 门槛</div>
+                    </div>
+                  );
+                }
+                const tied = g.leaderStatus === 'TIED_PENDING';
+                const top = champs[0];
+                return (
+                  <div className={`s-award-card ${tied ? 'tied' : ''}`} key={groupNo} style={style}>
+                    <div className="s-award-shine" />
+                    <Trophy />
+                    <div className="s-award-group">
+                      {pr.name} · {groupName}
+                      {tied ? ' · 并列·待确认' : ' · 标王'}
+                    </div>
+                    <div className={`s-award-unit ${champs.length > 1 ? 'multi' : ''}`}>{champs.map((r) => r.unitName).join('、')}</div>
+                    <div className="s-award-pp num">
+                      {top.finalPp}
+                      <span>%</span>
+                    </div>
+                    <div className="s-award-meta num">
+                      {top.addedPp > 0 && <span>较首轮 +{top.addedPp}</span>}
+                      {!tied && top.targetWan !== undefined && <span>竞标目标 {wan0(top.targetWan)} 万元</span>}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           );
         })}

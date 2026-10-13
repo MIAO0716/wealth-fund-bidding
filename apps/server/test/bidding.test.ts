@@ -106,6 +106,20 @@ describe('会前准备：理财、基金首轮一起冻结', () => {
   });
 });
 
+describe('大屏音效与颁奖模式', () => {
+  it('音效可在管理端选择（不合法的值被拒绝）；大屏可切到标王颁奖模式并拿到音效设置', async () => {
+    const eventId = await createFormalEvent(ctx);
+    const patch = (body: object) => call(ctx.app, 'PATCH', `/api/v1/admin/events/${eventId}/config`, { cookie: ctx.adminCookie, body });
+    expect((await patch({ soundBid: 'coin', soundChampion: 'firework', soundGroupStart: 'bigDrum' })).status).toBe(200);
+    expect((await patch({ soundChampion: 'bomb' })).body.error.code).toBe('BAD_REQUEST');
+    const m = await call(ctx.app, 'POST', `/api/v1/admin/events/${eventId}/screen-mode`, { cookie: ctx.adminCookie, body: { mode: 'AWARDS', projectCode: 'wealth' } });
+    expect(m.status).toBe(200);
+    const screen = await joinScreen(ctx, eventId);
+    const live = await call(ctx.app, 'GET', `/api/v1/screen/events/${eventId}/live`, { cookie: screen });
+    expect(live.body.event).toMatchObject({ screenMode: 'AWARDS', soundBid: 'coin', soundChampion: 'firework', soundGroupStart: 'bigDrum', screenSound: true });
+  });
+});
+
 describe('A08/A09 追加', () => {
   it('30% +5 → 35%，目标 = 底标 × 1.35；大屏跟随更新', async () => {
     const { eventId, pd } = await liveEvent();

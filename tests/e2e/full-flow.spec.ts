@@ -280,6 +280,38 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await admin.getByRole('button', { name: '开放本组' }).first().click();
   await expect(admin.getByText('第1组竞标中')).toBeVisible();
   await expect(screen.locator('.s-panel.open .s-prow')).toHaveCount(6);
+  // 音效可在管理端下拉选择
+  await admin.getByLabel('开放本组音效').selectOption('bigDrum');
+  await admin.getByLabel('新标王候选音效').selectOption('firework');
+  await expect(admin.getByLabel('新标王候选音效')).toHaveValue('firework');
+
+  // 基金第一组：浦东认领底标后加到 35%，成为新的标王候选 → 大屏中央爆炸特效
+  await pd.page.getByRole('button', { name: '确认认领基础底标' }).click();
+  await pd.page.getByRole('button', { name: '确认认领', exact: true }).click();
+  await expect(pd.page.getByText(/已确认认领底标/)).toBeVisible();
+  await pd.page.getByLabel('追加百分点').fill('25');
+  await pd.page.locator('.m-main-btn').click();
+  await pd.page.locator('.modal').getByRole('button', { name: '确认提交' }).click();
+  await expect(pd.page.getByRole('heading', { name: '追加成功 · 服务器已确认' })).toBeVisible();
+  const burst = screen.locator('.s-burst');
+  await expect(burst).toBeVisible();
+  await expect(burst).toContainText('新标王候选');
+  await expect(burst).toContainText('浦东');
+  await expect(burst).toContainText('35');
+  await screen.waitForTimeout(1300);
+  await shot(screen, 'screen-champion');
+  // 约 5.5 秒后自动消失
+  await expect(burst).toHaveCount(0, { timeout: 8000 });
+
+  // 标王颁奖页：理财三组已揭晓（第一组浦东），基金待锁定
+  await admin.getByRole('button', { name: '标王颁奖' }).click();
+  await expect(screen.locator('.s-award-card')).toHaveCount(6);
+  await expect(screen.locator('.s-award-card').first()).toContainText('浦东');
+  await expect(screen.locator('.s-award-card').first()).toContainText('35');
+  await expect(screen.locator('.s-award-card').nth(1)).toContainText('本组暂无标王');
+  await expect(screen.locator('.s-award-card').nth(3)).toContainText('待锁定后揭晓');
+  await screen.waitForTimeout(2200);
+  await shot(screen, 'screen-awards');
   await admin.goto(`/admin/events/${eventId}/first-round`);
   await shot(admin, 'admin-first-round');
 

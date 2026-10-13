@@ -26,13 +26,27 @@ export interface EventConfig {
   showAmountsOnScreen: boolean;
   /** 大屏声音：加码提示音与标王音效（管理端控制） */
   screenSound: boolean;
+  /** 普通加码音效 */
+  soundBid: string;
+  /** 新标王候选音效 */
+  soundChampion: string;
+  /** 开放本组（开始竞标）音效 */
+  soundGroupStart: string;
   /** 会场 Wi-Fi 名称（填写后领导使用卡上印「扫码连 Wi-Fi」二维码；可留空） */
   wifiSsid: string;
   /** 会场 Wi-Fi 密码（开放网络留空） */
   wifiPassword: string;
 }
 
-export type ScreenMode = 'FIRST_ROUND' | 'LIVE' | 'RESULTS';
+export type ScreenMode = 'FIRST_ROUND' | 'LIVE' | 'RESULTS' | 'AWARDS';
+
+/** 大屏可选音效 */
+export const BID_SOUNDS = { ding: '清脆叮', coin: '金币', drum: '鼓点', bell: '风铃' } as const;
+export const CHAMPION_SOUNDS = { fanfare: '上扬号角', firework: '烟花', trumpet: '凯旋', cheer: '欢呼掌声' } as const;
+export const GROUP_START_SOUNDS = { gong: '敲锣', bigDrum: '战鼓三通', gongDrum: '鼓点 + 锣', off: '不播放' } as const;
+export type BidSoundId = keyof typeof BID_SOUNDS;
+export type ChampionSoundId = keyof typeof CHAMPION_SOUNDS;
+export type GroupStartSoundId = keyof typeof GROUP_START_SOUNDS;
 
 export interface EventSummary {
   id: string;

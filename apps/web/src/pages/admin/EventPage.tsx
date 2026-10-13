@@ -57,7 +57,7 @@ export function EventPage({ me }: { me: AdminInfo }) {
           </h2>
           <div className="small muted" style={{ marginTop: 4 }}>
             理财：{PROJECT_STATUS_NAMES[data.projects.wealth.status]} · 基金：{PROJECT_STATUS_NAMES[data.projects.fund.status]} · 大屏模式：
-            {ev.screenMode === 'FIRST_ROUND' ? '首轮' : ev.screenMode === 'LIVE' ? '实时' : '结果'}（{ev.screenProject === 'wealth' ? '理财' : '基金'}）
+            {ev.screenMode === 'FIRST_ROUND' ? '首轮' : ev.screenMode === 'LIVE' ? '实时' : ev.screenMode === 'AWARDS' ? '标王颁奖' : '结果'}（{ev.screenProject === 'wealth' ? '理财' : '基金'}）
           </div>
         </div>
         <ConnLine conn={conn} lastSyncAt={lastSyncAt} />

@@ -1,5 +1,8 @@
 import {
+  BID_SOUNDS,
+  CHAMPION_SOUNDS,
   DEFAULT_ALLOWED_INCREMENT_STEPS,
+  GROUP_START_SOUNDS,
   DEFAULT_HIGH_VALUE_CONFIRM_PP,
   type EventConfig,
   type EventSummary,
@@ -32,6 +35,9 @@ export const DEFAULT_CONFIG: EventConfig = {
   // 大屏默认展示底标与按增幅实时计算的目标金额
   showAmountsOnScreen: true,
   screenSound: true,
+  soundBid: 'ding',
+  soundChampion: 'fanfare',
+  soundGroupStart: 'gong',
   wifiSsid: '',
   wifiPassword: '',
 };
@@ -53,6 +59,9 @@ const configPatchSchema = z
     highValueConfirmPp: z.number().int().min(5).max(100000),
     showAmountsOnScreen: z.boolean(),
     screenSound: z.boolean(),
+    soundBid: z.enum(Object.keys(BID_SOUNDS) as [string, ...string[]]),
+    soundChampion: z.enum(Object.keys(CHAMPION_SOUNDS) as [string, ...string[]]),
+    soundGroupStart: z.enum(Object.keys(GROUP_START_SOUNDS) as [string, ...string[]]),
     wifiSsid: z.string().max(64),
     wifiPassword: z.string().max(64),
   })
@@ -199,7 +208,7 @@ export async function setScreenMode(
   input: { mode?: unknown; projectCode?: unknown },
 ) {
   const mode = input.mode;
-  if (mode !== 'FIRST_ROUND' && mode !== 'LIVE' && mode !== 'RESULTS') throw bizError('BAD_REQUEST', '大屏模式不合法');
+  if (mode !== 'FIRST_ROUND' && mode !== 'LIVE' && mode !== 'RESULTS' && mode !== 'AWARDS') throw bizError('BAD_REQUEST', '大屏模式不合法');
   const projectCode = input.projectCode;
   if (projectCode !== 'wealth' && projectCode !== 'fund') throw bizError('BAD_REQUEST', '项目代码不合法');
   return runWrite(ctx, eventId, actor, { operation: 'SCREEN_MODE' }, async (tx) => {

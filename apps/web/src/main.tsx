@@ -18,6 +18,7 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/screen/first-round" element={<ScreenPage mode="FIRST_ROUND" />} />
         <Route path="/screen/live" element={<ScreenPage mode="LIVE" />} />
         <Route path="/screen/results" element={<ScreenPage mode="RESULTS" />} />
+        <Route path="/screen/awards" element={<ScreenPage mode="AWARDS" />} />
         <Route path="/mock-kdocs" element={<MockKdocsPage />} />
         <Route path="/admin/*" element={<AdminApp />} />
         <Route path="*" element={<Navigate to="/admin" replace />} />
