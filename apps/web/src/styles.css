@@ -2817,3 +2817,15 @@ textarea {
     animation: none !important;
   }
 }
+
+/* 实时大屏：增加底标列（万元） */
+.s-panel.amounts .s-pcols,
+.s-panel.amounts .s-prow {
+  grid-template-columns: 100px minmax(0, 1fr) 220px 170px 270px 270px;
+}
+.s-base {
+  text-align: right;
+  font-size: 36px;
+  font-weight: 600;
+  color: rgba(246, 227, 180, 0.85);
+}

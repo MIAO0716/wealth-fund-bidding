@@ -184,6 +184,8 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await expect(pdRow.locator('.s-current')).toContainText('35');
   // 目标金额随增幅实时计算：100 万 × 1.35
   await expect(pdRow.locator('.s-target')).toHaveText('135');
+  // 底标列（万元，取整）
+  await expect(pdRow.locator('.s-base')).toHaveText('100');
   // 专场字样居中显示；右上角显示领导在线数
   await expect(screen.locator('.s-head-center')).toHaveText('理财专场');
   await expect(screen.locator('.s-online')).toContainText(/领导在线 \d+\/16/);
@@ -263,11 +265,10 @@ test('双项目完整流程：导入 → 发布首轮 → 认领 → 分组加�
   await expect(screen.locator('.s-result-row.top', { hasText: '浦东' }).locator('.added')).toHaveText('+5');
   await expect(screen.locator('.s-result-row.top', { hasText: '浦东' })).toContainText('35%');
   await screen.waitForTimeout(1000); // 等入场动画结束再截图
-  // 每个项目下方显示全市合计：底标 16×100 万 = 0.16 亿 → 目标 1,790 万 = 0.18 亿，增幅 11.88%
+  // 每个项目下方显示全市合计（亿元与增幅均四舍五入取整）：底标 0.16 亿 → 目标 0.179 亿，增幅 11.875% → 12%
   const total = screen.locator('.s-result-project').first().locator('.s-total');
-  await expect(total).toContainText('0.16');
-  await expect(total).toContainText('0.18');
-  await expect(total).toContainText('11.88%');
+  await expect(total).toContainText('亿元');
+  await expect(total).toContainText('12%');
   await shot(screen, 'screen-results');
 
   // ---------------------------------------------------------- 基金：首轮已在会前冻结，理财锁定后手机自动转到基金

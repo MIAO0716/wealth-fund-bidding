@@ -14,7 +14,7 @@ import { type CSSProperties, type ReactNode, useEffect, useLayoutEffect, useRef,
 import { useSearchParams } from 'react-router-dom';
 import { DemoBadge } from '../../components/ui';
 import { api, errorText, takeHashParam } from '../../lib/api';
-import { fenToYi2, fmtTime, increasePct2, wan0 } from '../../lib/format';
+import { fenToYi0, fmtTime, increasePct0, wan0 } from '../../lib/format';
 import { audioReady, playBidSound, playChampionSound, playGroupStartSound, unlockAudio } from '../../lib/sound';
 import { CONN_LABEL, type ConnState, useRealtime } from '../../lib/realtime';
 
@@ -502,6 +502,7 @@ function FocusPanel({ g, flash, className }: { g: GroupBoard; flash: Record<stri
       <div className="s-pcols">
         <span>排名</span>
         <span>单位</span>
+        {withAmounts && <span>底标（万元）</span>}
         <span>首轮增幅</span>
         <span>当前增幅</span>
         {withAmounts && <span>竞标目标（万元）</span>}
@@ -524,6 +525,7 @@ function FocusPanel({ g, flash, className }: { g: GroupBoard; flash: Record<stri
                 {r.unitName}
                 {!waiting && badge}
               </span>
+              {withAmounts && <span className="s-base num">{wan0(r.baseTargetWan)}</span>}
               <span className="s-first num">
                 {r.firstRoundPp}
                 <span className="pct">%</span>
@@ -652,14 +654,14 @@ function ResultsScreen({ eventId }: { eventId: string }) {
                 <div className="s-total">
                   <span className="s-total-label">全市合计</span>
                   <span className="s-total-item">
-                    基础底标<b className="num">{fenToYi2(pr.totals.baseFen)}</b>亿元
+                    基础底标<b className="num">{fenToYi0(pr.totals.baseFen)}</b>亿元
                   </span>
                   <span className="s-total-arrow">→</span>
                   <span className="s-total-item main">
-                    最终竞标目标<b className="num">{fenToYi2(pr.totals.targetFen)}</b>亿元
+                    最终竞标目标<b className="num">{fenToYi0(pr.totals.targetFen)}</b>亿元
                   </span>
                   <span className="s-total-item main">
-                    全市增幅<b className="num">{increasePct2(pr.totals.baseFen, pr.totals.targetFen)}%</b>
+                    全市增幅<b className="num">{increasePct0(pr.totals.baseFen, pr.totals.targetFen)}%</b>
                   </span>
                 </div>
               )}
@@ -823,7 +825,6 @@ function AwardsScreen({ eventId }: { eventId: string }) {
                       <span>%</span>
                     </div>
                     <div className="s-award-meta num">
-                      {top.addedPp > 0 && <span>较首轮 +{top.addedPp}</span>}
                       {!tied && top.targetWan !== undefined && <span>竞标目标 {wan0(top.targetWan)} 万元</span>}
                     </div>
                   </div>

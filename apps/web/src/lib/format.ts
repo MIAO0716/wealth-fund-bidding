@@ -62,3 +62,19 @@ export function increasePct2(baseFen: string, targetFen: string): string {
   const h = (abs * 10_000n * 2n + b) / (2n * b); // 百分之一个百分点
   return `${neg ? '-' : ''}${h / 100n}.${(h % 100n).toString().padStart(2, '0')}`;
 }
+
+/** 分 → 亿元，四舍五入取整 */
+export function fenToYi0(fen: string | null | undefined): string {
+  if (fen === null || fen === undefined) return '—';
+  return ((BigInt(fen) + 5_000_000_000n) / 10_000_000_000n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+/** 增幅百分比（目标 ÷ 底标 − 1），按精确金额计算后四舍五入取整 */
+export function increasePct0(baseFen: string, targetFen: string): string {
+  const b = BigInt(baseFen);
+  if (b === 0n) return '—';
+  const diff = BigInt(targetFen) - b;
+  const neg = diff < 0n;
+  const abs = neg ? -diff : diff;
+  return `${neg ? '-' : ''}${(abs * 100n * 2n + b) / (2n * b)}`;
+}
