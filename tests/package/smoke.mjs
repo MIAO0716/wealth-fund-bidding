@@ -17,8 +17,21 @@ function assert(cond, msg) {
   console.log(`✓ ${msg}`);
 }
 const cookieOf = (res) => (res.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0]).join('; ');
+/** 安装/升级刚完成时 Nginx 可能仍在平滑重载，旧连接会被关闭：网络错误时稍等重试（最多 3 次） */
+async function fetchRetry(url, init = {}) {
+  for (let i = 0; ; i++) {
+    try {
+      return await fetch(url, init);
+    } catch (e) {
+      if (i >= 3) throw e;
+      console.log(`  （网络错误，${i + 1} 秒后重试：${e.cause?.code ?? e.message}）`);
+      await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
+    }
+  }
+}
+
 async function req(method, path, body, cookie) {
-  const r = await fetch(BASE + path, {
+  const r = await fetchRetry(BASE + path, {
     method,
     headers: { ...(method === 'GET' ? {} : H), ...(cookie ? { cookie } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -28,7 +41,7 @@ async function req(method, path, body, cookie) {
   return { status: r.status, data, res: r };
 }
 
-const page = await fetch(`${BASE}/admin`);
+const page = await fetchRetry(`${BASE}/admin`);
 assert(page.status === 200 && (await page.text()).includes('<title>现场竞标</title>'), '管理端页面可访问');
 const login = await req('POST', '/api/v1/auth/admin/login', { username: 'admin', password: process.env.ADMIN_PASSWORD });
 assert(login.status === 200, '管理员登录');
